@@ -107,7 +107,9 @@ look, but the data now lives on the server, shared and backed-up instead of trap
 **Data migration (explicit step):** the seed data is the dataset **baked into
 `supplier-price-db/prototype.html`** (917 products / 1,443 offers; you confirmed you haven't edited it in
 your browser, so no browser export is needed). A one-off script extracts it (the existing `split.py`) and
-loads it into the SQLite schema — run once, verified by row counts. *Done when:* you open
+loads it into the SQLite schema — run once, verified by row counts. **Caveat:** the baked seed is already
+2dp-rounded (a prototype limitation, §2.4), so it seeds history at 2dp while Phase-3 imports carry full
+precision — re-import an original file if exact historical precision ever matters. *Done when:* you open
 `prices.rivieraessentials.com`, see your 1,443 offers, and every screen (Offers, Best sellers, Requests,
 Suppliers, Settings) works against the server.
 
@@ -115,10 +117,13 @@ Suppliers, Settings) works against the server.
 Uploading a file (**`.xlsx`, `.xls` or `.csv`**) POSTs it to the server. Parsing stays in the browser via
 SheetJS (which reads all three and is already tuned on your files); the normalized rows are inserted as new
 offers, **and the original file is stored** under `/data/pricedb/uploads/` (audit + re-processing), with
-its SHA-256 so a duplicate upload warns you. The brand-approval / review-queue flow stays as is. This is
+its SHA-256 so a duplicate upload warns you. The brand-approval / review-queue flow stays as is. **The
+importer MUST NOT round** — unlike the prototype (2dp price / 4dp EUR), production stores `price_original`
+at **full quoted precision** (integer minor units, §12 O5) and computes per-piece/EUR on read. This is
 where the design's **10-file importer test (§7)** runs — on your **8 supplied files now**, plus 2 more to
 collect — *before* the review screens and CRM link depend on it. *Done when:* each real file lands correct
-offers, the raw file is retrievable, and the review queue stays small.
+offers, the raw file is retrievable, the review queue stays small, and **a 3-decimal price round-trips
+through import unchanged** (explicit test).
 
 **Phase 4 — Backups, off-site, and offline downloads (the "never lose it" phase).** *(details in §5)*
 
@@ -198,8 +203,8 @@ you find out backups are good *before* you ever need them, not after.
 (SheetJS self-hosted + SRI, Apache-2.0); offline copy = **download button + weekly reminder** (auto-pull
 later); **systemd for the price DB** (the CRM's supervision is referenced to its Stage 1 Part D, not done
 here); two Access emails (main + Gmail) + Gmail as second Cloudflare admin; seed data from the baked-in
-prototype; money as **integer minor units**, FX rates stored exactly, derived EUR/per-piece **computed on
-read** (design §12 O5).
+prototype; money as **integer minor units** (importer must NOT round — full precision stored), FX rates
+stored **as TEXT** (Python `Decimal` math), derived EUR/per-piece **computed on read** (design §12 O5).
 
 **Still open (awaiting input, ~1–2 days)** — design §12: CRM link direction (a/b/c), offer freshness rule,
 quantities, FX default view. The schema reserves for all of these, so **Phases 1–4 can start now** and none
