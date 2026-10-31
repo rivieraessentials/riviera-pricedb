@@ -475,16 +475,17 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 
 Direction decided 2026-10-31 (exact scale pending Ted's confirmation). Grounded in a read-only decimal scan of the 16 baked batches:
 
-- **Quoted prices: ≤ 2 decimals in every file** (global max 2dp; 168 values at 1dp, 1,275 at 2dp). *Caveat: this is a post-parse proxy — the raw supplier files are not in the repo; confirm against the originals with the command the developer was given.*
+- **Quoted prices: the baked-data scan is UNRELIABLE for this.** The prototype's parser **rounds the chosen price to 2 decimals** before storing it (`price:Math.round(Math.min(...ps)*100)/100`, [prototype.html:252](supplier-price-db/prototype.html)), and EUR to 4dp (:606). So the "≤2dp across all 16 batches" the scan reported only reflects **that rounding**, not what suppliers actually quote. The true decimal count **must** come from the **raw files** (corrected scan script provided). Until that runs, the price scale is provisional.
 - **FX rates: up to 5 decimals** (EUR 1.0, USD 1.1253, GBP **0.84385**, SGD 1.4395, CAD 1.5935, HKD 8.8316 — ECB's ~5-significant-figure convention).
 
 | Field | Decision | Representation | Note |
 |---|---|---|---|
-| `price_original` (quoted price) | **integer minor units at a fixed scale**, never float | scale chosen with margin over the scan — **≥4 decimals (×10,000) proposed** (covers the observed 2dp + headroom for future sub-cent quotes) | Ted picks the final scale |
+| `price_original` (quoted price) | **integer minor units**, never float — **DECIDED: 4 decimals (×10,000), pending raw scan** | **→ 6 decimals (×1,000,000) if the corrected raw-file scan shows any supplier quoting 3+ decimals** | the baked scan can't confirm this (parser rounds to 2dp, above), so the raw scan is the gate |
 | `fx_rate_eur`, `fx_rates.rate` | **stored exactly as published**, never float | **text** (exact string, e.g. `"0.84385"`) *or* **high-scale integer** (e.g. ×10⁸) | Ted picks text vs integer (trade-off below) |
 | `price_eur`, `unit_price_eur` | **computed on read, not stored** per offer row | — | `current_best` remains the **only** rebuildable cache |
 
 **FX storage trade-off:** *text* stores exactly what ECB published at any precision and never drifts, but each arithmetic step must parse to `Decimal` (no direct SQL math); *high-scale integer* (e.g. rate ×10⁸) is exact to that scale and allows integer SQL math, but fixes precision at the chosen scale up front. Either satisfies "never float."
+**Where EUR is computed (drives the choice):** in this design EUR is computed **in Python at import** (inserting offers and maintaining `current_best`), and the cross-currency comparison grid **sorts on the precomputed `current_best` integer** — so there is **no bulk rate-multiplication inside ad-hoc SQL**. The only thing that might do SQL-side rate math is a future "recompute at today's rate" across many rows (O4). **Recommendation (not a decision):** if all EUR math stays in Python/JS as designed, **text** is exact and simplest; pick **scaled integer** only to keep the option of multiplying rates **in SQL** without CAST-to-float.
 **Why integer minor units for prices:** the roadmap rule is *money in integer cents / exact decimal, never float* (LED-1159 #5, RESTART_PLAN §SQLite). Plain 2-dp cents is too tight for sub-cent per-piece prices; a fixed higher scale keeps the quoted value exact and defers the inevitable rounding to the computed per-piece value.
 
 ---
