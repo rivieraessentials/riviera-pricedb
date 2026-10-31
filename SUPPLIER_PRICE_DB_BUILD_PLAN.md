@@ -26,7 +26,8 @@ this is the "how we build it, safely, without ever losing data."*
    answer to "can I change it later": even past decisions aren't locked in.
 
 Schema changes (a new field, a new table) are done with small, reversible migration scripts — rehearsed
-on a copy first, exactly like the attachment migration you just did.
+on a copy first, the same discipline as the CRM's **Stage 1b** attachment migration, which has been
+**built and rehearsed on a copy but is not yet deployed** (Stage 1d is the part that is live).
 
 ---
 
@@ -50,10 +51,11 @@ problem in one can never corrupt the other.
 ```
 
 - **Same box, new port.** A second uvicorn process on `:8001`, owned by `tedj`, bound to `127.0.0.1`. It
-  runs under its **own systemd unit** (`Restart=always`, enabled) so it survives crashes and reboots — and
-  the same cutover fixes the CRM, which today runs as a manual `nohup` process that would *not* survive a
-  reboot (its `riviera-crm.service` unit exists but is inactive — tracked as **LED-0048 / LED-0078**, not a
-  new task). Server confirmed 2026-10-30: Ubuntu 24.04, **Python 3.12.3**, **61 GB free**.
+  runs under its **own systemd unit** (`Restart=always`, enabled) so it survives crashes and reboots. The
+  **CRM's** supervision is separate — the roadmap's **Stage 1 Part D** (a watchdog without sudo, or systemd
+  if sudo; **LED-0048 / LED-0078**); today the CRM runs as a manual `nohup` process that would *not* survive
+  a reboot. The price-DB plan **references** that item, it doesn't do it. Server confirmed 2026-10-30:
+  Ubuntu 24.04, **Python 3.12.3**, **61 GB free**.
 - **Same login.** It sits behind the same Cloudflare Access policy, so there is **one** login and nothing
   is reachable from the open internet without it. The app itself only listens on `127.0.0.1` — same as
   the CRM — so Cloudflare is the only way in.
@@ -163,10 +165,12 @@ I'll build this in Phase 5 once you choose.
 - **Defence in depth:** today neither app checks identity in code (Cloudflare is the only gate — LED-1083).
   The price DB can optionally verify the Access JWT and check the email against a **config allow-list holding
   both addresses — never hardcoded**, so a second email stays a config change.
-- **Both apps under systemd** (`Restart=always`, enabled) so a crash or reboot auto-restarts them (the CRM
-  isn't today — LED-0048/0078).
-- **Uploads are validated** — only `.xlsx/.xls/.csv`, size-capped, parsed in the browser (SheetJS); the
-  server stores the original bytes and never executes an upload. Every SQL query is parameterized.
+- **The price DB runs under its own systemd unit** (`Restart=always`, enabled) so a crash or reboot
+  auto-restarts it; the **CRM's** supervision is the roadmap's Stage 1 Part D (watchdog-or-systemd;
+  LED-0048/0078) — referenced, not done here.
+- **Uploads are validated** — only `.xlsx/.xls/.csv`, size-capped, parsed in the browser with
+  **self-hosted, pinned SheetJS + SRI** (Apache-2.0); the server stores the original bytes and never
+  executes an upload. Every SQL query is parameterized.
 - **No secrets in the page.** FX needs no API key; anything sensitive lives server-side only.
 
 **Backups & never-losing-it — the 3-2-1 rule, with an offline copy you control:**
@@ -190,9 +194,12 @@ you find out backups are good *before* you ever need them, not after.
 
 ## 6. Status of decisions
 
-**Decided (2026-10-31):** address = **`prices.rivieraessentials.com`**; file types **.xlsx/.xls/.csv**;
-offline copy = **download button + weekly reminder** (auto-pull later); **systemd for both apps**; two
-Access emails (main + Gmail) + Gmail as second Cloudflare admin; seed data from the baked-in prototype.
+**Decided (2026-10-31):** address = **`prices.rivieraessentials.com`**; file types **.xlsx/.xls/.csv**
+(SheetJS self-hosted + SRI, Apache-2.0); offline copy = **download button + weekly reminder** (auto-pull
+later); **systemd for the price DB** (the CRM's supervision is referenced to its Stage 1 Part D, not done
+here); two Access emails (main + Gmail) + Gmail as second Cloudflare admin; seed data from the baked-in
+prototype; money as **integer minor units**, FX rates stored exactly, derived EUR/per-piece **computed on
+read** (design §12 O5).
 
 **Still open (awaiting input, ~1–2 days)** — design §12: CRM link direction (a/b/c), offer freshness rule,
 quantities, FX default view. The schema reserves for all of these, so **Phases 1–4 can start now** and none

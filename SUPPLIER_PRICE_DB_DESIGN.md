@@ -56,7 +56,7 @@ offer_batches               -- one batch = one "column" in the grid = one suppli
   kind            TEXT      -- 'price list' | 'stock offer' | ... (a supplier can have many)
   source_file     TEXT      -- original filename, kept for audit
   source_sha256   TEXT      -- checksum of the uploaded file; a re-upload of the same bytes warns "already imported" (§2.1)
-  fx_rate_eur     REAL      -- rate used EUR<->currency at import (see §4)
+  fx_rate_eur     TEXT|INT  -- the import-date rate, stored EXACTLY as published, NEVER float (O5 §12: text vs high-scale integer — Ted picks). see §4
   fx_source       TEXT      -- 'frankfurter' | 'ecb' | 'manual'
   fx_locked       INTEGER   -- 1 if you overrode the rate manually (manual wins, and is saved here)
   label           TEXT      -- optional column header text, e.g. "Supplier X — 2026-10-12 stock"
@@ -65,12 +65,14 @@ offers                      -- APPEND-ONLY price history. one row per (batch, pr
   offer_id        PK
   batch_id        FK
   product_id      FK
-  price_original  REAL      -- the LOWEST price taken from the file's price columns (see §2.4)
+  price_original  INTEGER   -- the LOWEST quoted price, as INTEGER MINOR UNITS at a fixed scale (O5 §12; NEVER float).
+                            -- scan 2026-10-31: quoted prices are ≤2 decimals in all 16 batches; scale chosen with margin (≥4dp / ×10,000 proposed).
   currency        TEXT      -- usually = batch currency, but stored per-row for safety
-  price_eur       REAL      -- derived: price_original converted with the batch's fx_rate
   pieces_per_box  INTEGER   -- the case pack AS QUOTED in this offer (can differ per supplier)
   price_basis     TEXT      -- 'per_piece' | 'per_box' — read from the file's basis column (§1.2)
-  unit_price_eur  REAL      -- derived normalized: EUR price for ONE single piece (see §1.2)
+  -- NOTE (O5 §12): price_eur and unit_price_eur are NO LONGER stored here. EUR and per-piece values are
+  -- COMPUTED ON READ from price_original + currency + the batch's fx_rate + pieces_per_box + price_basis.
+  -- (Per-piece is a division result — inherently rounded — so it is never stored as a source of truth.)
   raw_row         TEXT      -- JSON of the original parsed row, for audit/review
   available_qty   INTEGER   -- nullable; stock quantity if the offer states it (OPEN decision §12 — reserved now, unused until decided)
   moq             INTEGER   -- nullable; minimum order quantity if stated (OPEN decision §12)
@@ -81,14 +83,14 @@ offers                      -- APPEND-ONLY price history. one row per (batch, pr
 fx_rates                    -- daily cache of fetched rates (base EUR)
   rate_date       DATE
   currency        TEXT
-  rate            REAL      -- 1 EUR = rate * currency
+  rate            TEXT|INT  -- 1 EUR = rate * currency; stored EXACTLY as published, NEVER float (O5 §12). scan: up to 5 decimals (e.g. GBP 0.84385)
   source          TEXT
   PRIMARY KEY (rate_date, currency)
 
 current_best                -- MAINTAINED cache: cheapest LIVE offer per product (see §3.3)
   product_id      PK
   best_offer_id   FK
-  best_unit_price_eur  REAL
+  best_unit_price_eur  INTEGER  -- rounded per-piece EUR as minor units; a DERIVED, rebuildable cache value (the ONLY stored cache — O5 §12)
   best_supplier_id FK
   updated_at
   -- "LIVE" = which offers still count. The freshness rule that decides this is an OPEN decision (§12),
@@ -229,6 +231,15 @@ browser parses the file and POSTs (a) the **normalized rows** and (b) the **orig
 which stores the original under `/data/pricedb/uploads/` (audit + re-import) and appends the offers. This
 reuses proven code and makes the server-side `.xls` library question moot.
 
+**Build requirement for SheetJS.** SheetJS Community Edition is **Apache-2.0**, and its official docs name
+**`cdn.sheetjs.com` as the authoritative source** (current version **0.20.3**); the docs install from that
+CDN and do **not** direct users to the public npm registry. So the production app **self-hosts a pinned
+SheetJS build with Subresource Integrity (SRI)** and keeps the Apache-2.0 attribution notice — rather than
+loading it from a third-party CDN (the prototype's cdnjs `0.18.5`). This also closes the security track's
+"CDN libraries without SRI" item (LED-1147). Sources: [SheetJS licence](https://docs.sheetjs.com/docs/miscellany/license/) ·
+[install / CDN](https://docs.sheetjs.com/docs/getting-started/installation/standalone/) ·
+[version](https://docs.sheetjs.com/docs/api/).
+
 **If parsing is ever moved server-side (Python), the readers are format-specific — verified 2026-10-31, not assumed:**
 
 | Format | Reader | Note |
@@ -239,6 +250,10 @@ reuses proven code and makes the server-side `.xls` library question moot.
 
 Pin and re-verify these at install (xlrd is low-maintenance). Either way the **security rule is the same (§6):**
 validate type and size, parse defensively, never execute an upload, keep the original bytes.
+
+Official confirmation (not blog tutorials): openpyxl rejects `.xls` with `InvalidFileException` and accepts
+only `.xlsx/.xlsm/.xltx/.xltm` — [openpyxl docs](https://openpyxl.readthedocs.io/); xlrd 2.0.0 (Dec 2020)
+removed everything except `.xls` — [xlrd changelog](https://xlrd.readthedocs.io/en/latest/changes.html).
 
 ---
 
@@ -267,7 +282,7 @@ Your volume is ~2,000 lines/day ≈ ~730k rows/year. I benchmarked at **5,000,00
 
 ### 3.3 The fix for those two: a maintained `current_best` table
 
-You don't need to re-scan 5M rows to know today's cheapest per product. Maintain a small `current_best` row per product, updated on each import for only the touched products (a 200-line import touches 200 rows). Then the global "cheapest everywhere", "best per brand", and the §9 sourcing feature read from `current_best` (250k rows, indexed) and return in **milliseconds** instead of ~5 s. The append-only `offers` table remains the full history behind it.
+You don't need to re-scan 5M rows to know today's cheapest per product. Maintain a small `current_best` row per product, updated on each import for only the touched products (a 200-line import touches 200 rows). Then the global "cheapest everywhere", "best per brand", and the §9 sourcing feature read from `current_best` (250k rows, indexed) and return in **milliseconds** instead of ~5 s. The append-only `offers` table remains the full history behind it. **`current_best` is the only maintained cache** (rebuildable from `offers` at any time); EUR and per-piece figures everywhere else are **computed on read**, not stored (O5 §12).
 
 **Conclusion:** SQLite handles many millions of rows here with ms-level interactivity. It runs **server-side on your domain host** (the same box as the CRM), as a single file read/written by the app's backend — so no separate database-server process is warranted, and the data lives on the server, not the laptop. (WAL mode on; single user, so no write-contention concerns.)
 
@@ -294,7 +309,7 @@ https://api.frankfurter.dev/v1/latest?base=EUR&symbols=GBP,USD,SGD,CAD,HKD
 - **Manual override wins and is saved with the offer.** On import you can type a rate; if you do, `fx_locked = 1`, `fx_source = 'manual'`, and that exact rate is stored on the batch and used for every row in it — permanently and reproducibly, never silently re-converted later.
 - **Weekend/holiday caveat:** neither ECB nor Frankfurter publishes rates on non-working days (Frankfurter returns the last working-day rate). The manual override is the escape hatch for those days.
 - **Display-currency switch:** prices are stored in original currency + a derived EUR value. The UI toggles the *display* among EUR (default), GBP, USD, SGD, CAD, HKD by converting from stored EUR via the current rates — storage never changes, only display.
-- **Two rates kept so either basis is computable (no migration needed):** the **import-date rate** is stored on the batch (`fx_rate_eur`) AND the **daily `fx_rates` table** keeps every day's rate. So a comparison can be shown at the *rate on the offer's import date* (stable, reproducible) or recomputed at *today's rate* (reflects current cost). **Which is the default view is an OPEN decision (§12)** — both are supported by the data; only the default is unset.
+- **Two rates kept so either basis is computable (no migration needed):** the **import-date rate** is stored on the batch (`fx_rate_eur`) AND the **daily `fx_rates` table** keeps every day's rate. So a comparison can be shown at the *rate on the offer's import date* (stable, reproducible) or recomputed at *today's rate* (reflects current cost). **Which is the default view is an OPEN decision (§12, O4)** — both are supported by the data; only the default is unset. Rates are stored **exactly as published, never float** (O5 §12) — ECB/Frankfurter run to ~5 significant figures (e.g. GBP 0.84385 = 5dp).
 - Attribution: if you ever publish the rates externally, cite "Source: European Central Bank". Internal single-user use needs nothing.
 
 ---
@@ -323,7 +338,9 @@ spirit; they differ in how data crosses:
   current best offer; nothing is ever written to the CRM. Likely all you need for quoting.
 - **(b) A new, genuinely-additive endpoint in the CRM** — a small, well-tested addition to `app.py` that
   merges products **by EAN** server-side and never touches other collections. More work; needs a CRM deploy
-  and its own test.
+  and its own test. **CRM-roadmap constraint:** this cannot land **before Stage 1b**, belongs in the
+  **structural/workflow phase**, ships in **its own sitting** (code and data never mixed), must pass the
+  **protected accountant-export diff**, and follows the **SQLite-ready rules** (LED-1159).
 - **(c) Whole-collection export/re-import** *(NOT recommended)* — safe only if you export the CRM's *entire
   current* product list, add to it, and re-import the whole thing. Fragile; one partial file wipes a
   collection. Recorded for completeness; avoid.
@@ -332,6 +349,12 @@ spirit; they differ in how data crosses:
 
 Per line: EAN, description, size, pieces/box, supplier, chosen price (original currency + EUR), date — joined
 on EAN, always ending with you reviewing/confirming inside the CRM.
+
+### 5.4 If suppliers are ever linked across the two systems — by stable ID, never name
+
+Today the link is **EAN-only** (products); suppliers are not cross-linked. The CRM has been bitten repeatedly
+by **name-keyed** matching (spelling variants spawn phantom parties). So if a price-DB supplier is ever tied
+to a CRM supplier, join on a **stable ID**, never the typed name — SQLite-ready rule #4 (LED-1159).
 
 ---
 
@@ -342,7 +365,7 @@ on EAN, always ending with you reviewing/confirming inside the CRM.
 - **Hosted on your domain, not the laptop.** Same server as the CRM (`178.105.34.50`, Ubuntu 24.04, **Python 3.12.3**, **61 GB free**), as a **separate app** — its own subdomain **`prices.rivieraessentials.com`**, its own FastAPI process on its own port (e.g. `:8001`), and its **own SQLite file** under `/data/pricedb/`. Decoupled from the CRM's save path and data. The laptop is just a browser; if it dies, you sign in from any device and everything is there.
 - **Login = the same Cloudflare Access.** One shared Access policy admits **two email addresses** — your main address and a **Gmail backup on a different provider** — for **both** apps, so losing one mailbox never locks you out. The same Gmail is added as a **second admin member** on the Cloudflare account. (Dashboard steps + a private-window login test with the second email: the runbook.)
 - **Defence in depth (identity).** Today **neither app checks identity in code** — Cloudflare Access is the sole gate (tracked as **LED-1083**). The price DB is the clean place to do it right: optionally verify the **`Cf-Access-Jwt-Assertion`** JWT on each `/api/*` request (signature against Access's public keys + expected `aud`) and check the email against an **allow-list held in config with both addresses — never hardcoded**. So adding/removing an email is a config/policy change, not a code change.
-- **Process supervision (both apps).** Run the price DB **and** the CRM under **systemd** (`Restart=always`, enabled) so a crash or a server reboot auto-restarts them. Today the CRM runs as a manual `nohup` process that would **not** survive a reboot (its `riviera-crm.service` unit exists but is inactive) — tracked as **LED-0048 / LED-0078**, confirmed not-done by the 2026-10-30 probe. The price-DB cutover ships its own unit and fixes the CRM's at the same time.
+- **Process supervision.** The price DB ships **its own systemd unit** (`Restart=always`, enabled) so a crash or reboot auto-restarts it. The **CRM's** supervision is **not** done here — it is the roadmap's **Stage 1 Part D** (a watchdog without sudo, or a systemd unit if sudo), tracked as **LED-0048 / LED-0078**; today the CRM runs as a manual `nohup` process that would not survive a reboot (confirmed 2026-10-30). The price-DB plan **references** that item, it does not perform it.
 - **Uploads are validated.** Only `.xlsx/.xls/.csv`, size-capped, parsed defensively (in the browser via SheetJS in the recommended design, §2.7); the server stores the original bytes under `/data/pricedb/uploads/` and **never executes** an upload. Every DB query is parameterized.
 - **The Cloudflare 100-second cap applies here too.** The free plan drops any origin request over 100 s (the CRM already feels this on full saves). So bulk import and full export must stay well under 100 s or stream/paginate — a design constraint, not an afterthought.
 - **Off-site backup: the same restic → BorgBase job** (append-only, EU, deletion-proven + restore-verified 2026-10-24). Adding `/data/pricedb` (the SQLite file **and** the `/uploads/` originals) is two more paths in the existing nightly command — restic dedups/encrypts client-side before anything leaves the server.
@@ -430,22 +453,40 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 10. **Look:** the prototype reuses the **CRM's exact CSS** (navy sidebar, same cards/tables/badges/fonts) so the two read as one suite, with a "Create CRM offer" hand-off. → §8, `supplier-price-db/prototype.html`.
 11. **File types (2026-10-31):** accept **`.xlsx`, `.xls`, `.csv`**. Readers verified in §2.7 (openpyxl does **not** read `.xls`; xlrd does) — recommended path parses in-browser with SheetJS, which reads all three. → §2.7, §6.
 12. **Offline copy (2026-10-31):** a **download button in the app** (SQLite file + a plain Excel/CSV export) + a **weekly calendar reminder**. An **automatic scheduled pull to your computer is a possible later improvement**, noted not built. → §6.
-13. **Process supervision (2026-10-31):** run **both** the CRM and the price DB under **systemd** (`Restart=always`, enabled) before cutover. The CRM side is already tracked — **LED-0048** (defect) / **LED-0078** (planned fix, P5); the 2026-10-30 probe confirms it's **not yet done** (a `riviera-crm.service` unit exists but is inactive; the app runs as a manual `nohup` process). The price-DB build ships its own unit and references that item for the CRM rather than duplicating it. → §6.
+13. **Process supervision (2026-10-31):** the price DB runs under **its own systemd unit** (`Restart=always`, enabled). The **CRM's** supervision is the roadmap's **Stage 1 Part D** (watchdog-without-sudo, or systemd if sudo) — **LED-0048** (defect) / **LED-0078** (fix, P5); the 2026-10-30 probe confirms it's **not yet done** (unit exists but inactive; manual `nohup`). The price-DB build **references** that item; it does not do the CRM's. → §6.
 14. **Prototype data source (2026-10-31):** seed data is the dataset **baked into `supplier-price-db/prototype.html`** (917 products / 1,443 offers); you confirmed you have not edited it in your browser, so no browser export is needed. → Build Plan Phase 2.
 15. **Cloudflare Access — two emails + second admin (2026-10-31):** one shared Access policy admits **two emails** (your main + a Gmail backup on a different provider) for both apps, and the Gmail is also added as a **second admin member** on the Cloudflare account. Steps in [SUBDOMAIN_SETUP_RUNBOOK.md](SUBDOMAIN_SETUP_RUNBOOK.md) + the recovery checklist in [BACKUP_SYSTEM.md](BACKUP_SYSTEM.md). → §6.
 16. **FX storage (2026-10-31):** keep **both** the import-date rate (on the batch) **and** the daily `fx_rates` table, so either comparison basis is computable without migration. → §4.2, §12.
 
 ---
 
-## 12. Open decisions (awaiting input, ~1–2 days) — schema already built so none needs a later migration
+## 12. Open decisions — schema already built so none needs a later migration
 
-These are **deliberately unset**; the schema reserves for every outcome, so choosing later is config, not migration.
+**O1–O4 are the END USER's** (the business owner) — awaiting their input, ~1–2 days. **O5 is the DEVELOPER's** (Ted) — direction decided below, exact scale pending. All are **deliberately unset in code**; the schema reserves for every outcome, so choosing later is config, not migration.
 
 | # | Decision | Reserved so no migration is needed | Trade-off (for when you decide) |
 |---|---|---|---|
-| O1 | **CRM link direction** (a/b/c) | §5.2; nothing built toward the CRM yet | (a) read-only lookup = safest/least work; (b) additive endpoint = one-click but needs a CRM deploy + test; (c) whole-collection re-import = **not recommended** (fragile). |
+| O1 | **CRM link direction** (a/b/c) | §5.2; nothing built toward the CRM yet | (a) read-only lookup = safest/least work; (b) additive endpoint = one-click but needs a CRM deploy + test; (c) whole-collection re-import = **not recommended** (fragile). **(b) roadmap constraint:** not before Stage 1b; structural/workflow phase; own sitting; protected-export diff; SQLite-ready rules (LED-1159). |
 | O2 | **Offer freshness rule** (when an offer stops counting for "best price") | `settings.freshness_rule` (+ `freshness_days`), `offers.valid_until`; `current_best` rebuilt from the rule | age cutoff (simple; can hide a valid old list) · newest-per-supplier (good for price lists; a promo can mask a standing price) · type-aware (most correct; needs the offer kind tagged). **`current_best` cannot be finalised until this is set.** |
 | O3 | **Quantities** (available qty / MOQ) | `offers.available_qty`, `offers.moq` (nullable, present now, unused) | including them lets "best price" respect stock/MOQ (more decision-useful) vs price-only (simpler; can rank an unbuyable price first). |
 | O4 | **FX default view** (import-date rate vs today's) | both rates stored (§4.2) | import-date = stable/reproducible; today = reflects current cost. Only the *default* is unset; both views work. |
 
-*The CRM-link code detail from the Part A review is recorded in §5.1. Intake is Excel (.xlsx/.xls) + CSV; the review queue plus EAN check-digit validation (§2.6) are the safety net against mistyped data.*
+### O5 — Money & rate representation (DEVELOPER decision — Ted, not the end user)
+
+Direction decided 2026-10-31 (exact scale pending Ted's confirmation). Grounded in a read-only decimal scan of the 16 baked batches:
+
+- **Quoted prices: ≤ 2 decimals in every file** (global max 2dp; 168 values at 1dp, 1,275 at 2dp). *Caveat: this is a post-parse proxy — the raw supplier files are not in the repo; confirm against the originals with the command the developer was given.*
+- **FX rates: up to 5 decimals** (EUR 1.0, USD 1.1253, GBP **0.84385**, SGD 1.4395, CAD 1.5935, HKD 8.8316 — ECB's ~5-significant-figure convention).
+
+| Field | Decision | Representation | Note |
+|---|---|---|---|
+| `price_original` (quoted price) | **integer minor units at a fixed scale**, never float | scale chosen with margin over the scan — **≥4 decimals (×10,000) proposed** (covers the observed 2dp + headroom for future sub-cent quotes) | Ted picks the final scale |
+| `fx_rate_eur`, `fx_rates.rate` | **stored exactly as published**, never float | **text** (exact string, e.g. `"0.84385"`) *or* **high-scale integer** (e.g. ×10⁸) | Ted picks text vs integer (trade-off below) |
+| `price_eur`, `unit_price_eur` | **computed on read, not stored** per offer row | — | `current_best` remains the **only** rebuildable cache |
+
+**FX storage trade-off:** *text* stores exactly what ECB published at any precision and never drifts, but each arithmetic step must parse to `Decimal` (no direct SQL math); *high-scale integer* (e.g. rate ×10⁸) is exact to that scale and allows integer SQL math, but fixes precision at the chosen scale up front. Either satisfies "never float."
+**Why integer minor units for prices:** the roadmap rule is *money in integer cents / exact decimal, never float* (LED-1159 #5, RESTART_PLAN §SQLite). Plain 2-dp cents is too tight for sub-cent per-piece prices; a fixed higher scale keeps the quoted value exact and defers the inevitable rounding to the computed per-piece value.
+
+---
+
+*The CRM-link code detail from the Part A review is recorded in §5.1. Intake is Excel (.xlsx/.xls) + CSV; the review queue plus EAN check-digit validation (§2.6) are the safety net against mistyped data. CRM roadmap single source of truth: [RESTART_PLAN_2026-10-13.md](RESTART_PLAN_2026-10-13.md) + [ROADMAP_LEDGER.md](ROADMAP_LEDGER.md).*
