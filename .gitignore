@@ -1,0 +1,27 @@
+# Riviera supplier price DB — ignore rules
+# Data minimisation: no real supplier/customer data, no secrets, no local runtime files.
+
+# Real supplier pricing prototype — never commit
+prototype.html
+
+# Local config holds the Cloudflare Access allow-list / settings — commit config.example.toml instead
+config.toml
+
+# Python virtualenvs
+.venv*/
+
+# SQLite databases (runtime only)
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime data and uploaded originals
+data/
+uploads/
+
+# JSON data files — synthetic fixtures only; real data is never committed
+*.json
+
+# Python caches
+__pycache__/
+*.pyc
