@@ -73,7 +73,8 @@ offers                      -- APPEND-ONLY price history. one row per (batch, pr
   -- NOTE (O5 §12): price_eur and unit_price_eur are NO LONGER stored here. EUR and per-piece values are
   -- COMPUTED ON READ from price_original + currency + the batch's fx_rate + pieces_per_box + price_basis.
   -- (Per-piece is a division result — inherently rounded — so it is never stored as a source of truth.)
-  raw_row         TEXT      -- JSON of the original parsed row, for audit/review
+  raw_row         TEXT      -- JSON of the original parsed row, for audit/review; for price cells keeps BOTH
+                            -- the formatted text the supplier saw (SheetJS .w) and the number format (.z), §2.4 pt 6
   available_qty   INTEGER   -- nullable; stock quantity if the offer states it (OPEN decision §12 — reserved now, unused until decided)
   moq             INTEGER   -- nullable; minimum order quantity if stated (OPEN decision §12)
   valid_until     DATE      -- nullable; offer expiry if stated (feeds the freshness rule, OPEN decision §12)
@@ -178,7 +179,8 @@ A file may show several price columns (retail, wholesale, other). Rule, applied 
 2. Parse each with EU/US locale awareness (`12,50` → `12.50`).
 3. Discard non-positive / blank / obviously-not-a-price values.
 4. **Take the minimum of the remaining** as `price_original`, record in `raw_row` which column it came from, then apply the basis rule (§1.2) to get the per-piece figure.
-5. **Store the chosen price at FULL precision — the importer MUST NOT round.** The prototype rounds the chosen price to 2dp (`Math.round(...*100)/100`, [prototype.html:252](supplier-price-db/prototype.html)) and EUR to 4dp (:606); the **production importer stores `price_original` exactly as quoted** (integer minor units at the decided scale, O5 §12), and per-piece/EUR are **computed on read**, never rounded into storage. **Test (Phase 3):** a 3-decimal price (e.g. `8.185`) survives import unchanged — it round-trips to `8.185`, not `8.19` or `8.18`.
+5. **Store the chosen price at FULL precision — the importer MUST NOT round.** The prototype rounds the chosen price to 2dp (`Math.round(...*100)/100`, [prototype.html:252](supplier-price-db/prototype.html)) and EUR to 4dp (:606); the **production importer stores `price_original` exactly as quoted** (integer minor units at ×1,000,000 / 6 decimals, O5 §12), and per-piece/EUR are **computed on read**, never rounded into storage. **Test (Phase 3):** a 3-decimal price (e.g. `8.185`) survives import unchanged — it round-trips to `8.185`, not `8.19` or `8.18`.
+6. **Capture both the stored value AND what the supplier saw on screen.** Excel often *displays* a price at 2 decimals while the cell *stores* more. Real examples from the raw files (number-format check 2026-11-01): HongKong `USD` cell holds `18.0037` but is formatted `"$"* #,##0.00` → the supplier sees **`$18.00`**; it's-a-10 `Price Euros` holds `3.9325` / `20.2675` but is formatted `[$€] #,##0.00` → the supplier sees **`€3.93` / `€20.27`**. So the importer must read, per price cell, **both**: the raw underlying value (SheetJS cell **`.v`**, verified [docs.sheetjs.com/docs/csf/cell](https://docs.sheetjs.com/docs/csf/cell)) → `price_original` at 6dp, exact, no rounding; **and** the formatted text (cell **`.w`**, what the supplier sees) plus the number-format string (cell **`.z`**) → stored verbatim in `raw_row`. SheetJS generates `.w` by default (`cellText:true`) and needs `cellNF:true` to also keep `.z` ([parse options](https://docs.sheetjs.com/docs/api/parse-options)). This preserves the evidence of the 2dp-shown / 4dp-held gap so the comparison rule (see §12 open question) can use whichever the end user decides is authoritative, without ever having thrown away the other.
 
 ### 2.5 Brand matching inside a mixed-brand file
 
@@ -463,7 +465,7 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 
 ## 12. Open decisions — schema already built so none needs a later migration
 
-**O1–O4 are the END USER's** (the business owner) — awaiting their input, ~1–2 days. **O5 is the DEVELOPER's** (Ted) — direction decided below, exact scale pending. All are **deliberately unset in code**; the schema reserves for every outcome, so choosing later is config, not migration.
+**O1–O4 and O6 are the END USER's** (the business owner) — awaiting their input, ~1–2 days. **O5 is the DEVELOPER's** (Ted) — decided below (price scale 6dp, FX TEXT). All are **deliberately unset in code**; the schema reserves for every outcome, so choosing later is config, not migration.
 
 | # | Decision | Reserved so no migration is needed | Trade-off (for when you decide) |
 |---|---|---|---|
@@ -471,6 +473,7 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 | O2 | **Offer freshness rule** (when an offer stops counting for "best price") | `settings.freshness_rule` (+ `freshness_days`), `offers.valid_until`; `current_best` rebuilt from the rule | age cutoff (simple; can hide a valid old list) · newest-per-supplier (good for price lists; a promo can mask a standing price) · type-aware (most correct; needs the offer kind tagged). **`current_best` cannot be finalised until this is set.** |
 | O3 | **Quantities** (available qty / MOQ) | `offers.available_qty`, `offers.moq` (nullable, present now, unused) | including them lets "best price" respect stock/MOQ (more decision-useful) vs price-only (simpler; can rank an unbuyable price first). |
 | O4 | **FX default view** (import-date rate vs today's) | both rates stored (§4.2) | import-date = stable/reproducible; today = reflects current cost. Only the *default* is unset; both views work. |
+| O6 | **Displayed vs stored price** — when a supplier's file *shows* `$18.00` but the cell *holds* `18.0037` (real cases: HongKong USD, it's-a-10 EUR; §2.4 pt 6), which figure is authoritative for comparison and for offers? | importer keeps **both** the full stored value (`price_original`, 6dp) and the formatted text the supplier saw (`raw_row`, §2.4 pt 6) — so either can be chosen without re-importing | stored full value = exact, matches what they'd invoice if they bill at full precision; displayed value = what the supplier "quoted" to the eye, matches a 2dp paper price list. Likely a per-supplier setting (some round on screen, some don't). **Not decided — needs the end user.** |
 
 ### O5 — Money & rate representation (DEVELOPER decision — Ted, not the end user)
 

@@ -121,9 +121,15 @@ its SHA-256 so a duplicate upload warns you. The brand-approval / review-queue f
 importer MUST NOT round** — unlike the prototype (2dp price / 4dp EUR), production stores `price_original`
 at **full quoted precision** (integer minor units, §12 O5) and computes per-piece/EUR on read. This is
 where the design's **10-file importer test (§7)** runs — on your **8 supplied files now**, plus 2 more to
-collect — *before* the review screens and CRM link depend on it. *Done when:* each real file lands correct
-offers, the raw file is retrievable, the review queue stays small, and **a 3-decimal price round-trips
-through import unchanged** (explicit test).
+collect — *before* the review screens and CRM link depend on it. The test files cover the header-naming
+variety already seen: price columns are **not** always called "price" — real headers include **`OFFER`**
+(clarins, clinique), **`PRICE (USD_`** (La Roche Posay), **`USD`** (HongKong) and **`Price Euros`**
+(it's-a-10). **Note:** the scan script's keyword auto-detection ([scripts/price_decimal_scan.py](scripts/price_decimal_scan.py))
+is a throwaway investigation aid, **not** the importer — it missed `OFFER` and latched onto title cells. The
+**importer uses explicit per-supplier column mappings** (set once in the wizard, §2.3, remembered per
+supplier), never keyword guessing. *Done when:* each real file lands correct offers (incl. an `OFFER`-headed
+file), the raw file is retrievable, the review queue stays small, **a 3-decimal price round-trips through
+import unchanged**, and the full stored value plus the supplier's on-screen text are both captured (§2.4 pt 6).
 
 **Phase 4 — Backups, off-site, and offline downloads (the "never lose it" phase).** *(details in §5)*
 
