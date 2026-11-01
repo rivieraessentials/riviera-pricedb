@@ -3,8 +3,10 @@
 # config.toml (or PRICEDB_* env vars) is the single source. See app/config.py.
 
 [server]
-host = "127.0.0.1"   # bind localhost ONLY — the app is never exposed directly (Cloudflare fronts it)
+host = "127.0.0.1"       # bind localhost ONLY — the app is never exposed directly (Cloudflare fronts it)
 port = 8001
+environment = "development"   # 'development' | 'production'. In production the app refuses to
+                              # start while freshness_rule is still the placeholder 'all' (O2 undecided).
 
 [database]
 path = "data/pricedb.db"   # relative to the backend dir; created on first run

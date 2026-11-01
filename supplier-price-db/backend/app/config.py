@@ -33,9 +33,14 @@ class AccessConfig:
 class Config:
     host: str = "127.0.0.1"
     port: int = 8001
+    environment: str = "development"   # 'development' | 'production'
     db_path: str = str(BACKEND_DIR / "data" / "pricedb.db")
     allowed_emails: list[str] = field(default_factory=list)
     access: AccessConfig = field(default_factory=AccessConfig)
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == "production"
 
     def email_allowed(self, email: str | None) -> bool:
         if not email:
@@ -68,6 +73,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     cfg = Config(
         host=server.get("host", "127.0.0.1"),
         port=int(server.get("port", 8001)),
+        environment=server.get("environment", "development"),
         db_path=db_path,
         allowed_emails=list(identity.get("allowed_emails", [])),
         access=AccessConfig(
@@ -85,6 +91,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         cfg.host = os.environ["PRICEDB_HOST"]
     if "PRICEDB_PORT" in os.environ:
         cfg.port = int(os.environ["PRICEDB_PORT"])
+    if "PRICEDB_ENV" in os.environ:
+        cfg.environment = os.environ["PRICEDB_ENV"]
     if "PRICEDB_ALLOWED_EMAILS" in os.environ:
         cfg.allowed_emails = [e for e in os.environ["PRICEDB_ALLOWED_EMAILS"].split(",") if e.strip()]
     if "PRICEDB_ACCESS_ENABLED" in os.environ:

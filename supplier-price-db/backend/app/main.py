@@ -10,13 +10,17 @@ from contextlib import asynccontextmanager, contextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from . import db, money, repo
+from . import db, importer, money, repo
 from .auth import Identity, require_identity
 from .config import Config, load_config
 from .models import (
     BatchCreate, BatchOut, CurrentBestOut, OffersCreate, OffersCreated,
-    OfferHistoryItem, ProductOffersOut, SupplierCreate, SupplierOut,
+    OfferHistoryItem, ProductOffersOut, ReviewItem, SupplierCreate, SupplierOut,
 )
+
+
+class ConfigError(RuntimeError):
+    """Startup refused because configuration is unsafe for the current environment."""
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -28,6 +32,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         conn = db.connect(cfg.db_path)
         try:
             db.migrate(conn)          # bring the schema up to date on startup
+            # Production guard: refuse to serve while the freshness rule is still the
+            # placeholder, so comparisons are never silently based on an undecided rule.
+            if cfg.is_production:
+                rule = repo.get_setting(conn, "freshness_rule", "all")
+                if rule == "all":
+                    raise ConfigError(
+                        "refusing to start in production: freshness_rule is still the "
+                        "placeholder 'all'. Decide O2 (offer freshness rule) and set "
+                        "freshness_rule in settings before serving production traffic."
+                    )
         finally:
             conn.close()
         yield
@@ -50,7 +64,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             applied = db.applied_versions(conn)
             conn.execute("SELECT 1")
         return {"status": "ok", "db": "ok", "migrations": applied,
-                "access_enabled": cfg.access.enabled}
+                "environment": cfg.environment, "access_enabled": cfg.access.enabled}
 
     # ---- suppliers ----
     @app.post("/suppliers", response_model=SupplierOut)
@@ -77,7 +91,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                         f"{dup['batch_id']} on {dup['received_date']}")
             return BatchOut(batch_id=bid)
 
-    # ---- offers (append-only) ----
+    # ---- offers (append-only; the import path routes bad rows to review) ----
     @app.post("/offers", response_model=OffersCreated)
     def create_offers(body: OffersCreate, who: Identity = Depends(require_identity)):
         with get_conn() as conn:
@@ -85,27 +99,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                                  (body.batch_id,)).fetchone()
             if batch is None:
                 raise HTTPException(404, detail=f"batch {body.batch_id} not found")
-            offer_ids, touched = [], []
-            for item in body.offers:
-                try:
-                    minor = money.to_minor(item.quoted_price)
-                except money.PriceScaleError as exc:
-                    raise HTTPException(422, detail=f"{item.ean}: {exc}") from exc
-                pid, _created = repo.get_or_create_product(
-                    conn, item.ean, description=item.description, size=item.size,
-                    first_seen_batch_id=body.batch_id,
-                )
-                oid = repo.create_offer(
-                    conn, body.batch_id, pid, minor, item.currency or batch["currency"],
-                    pieces_per_box=item.pieces_per_box, price_basis=item.price_basis,
-                    raw_row=item.raw_row, available_qty=item.available_qty,
-                    moq=item.moq, valid_until=item.valid_until,
-                )
-                offer_ids.append(oid)
-                if pid not in touched:
-                    touched.append(pid)
-            repo.rebuild_current_best(conn, touched)
-            return OffersCreated(offer_ids=offer_ids, products_touched=touched)
+            rows = [item.model_dump() for item in body.offers]
+            res = importer.import_rows(conn, body.batch_id, rows)
+            return OffersCreated(
+                offer_ids=res.offer_ids, products_touched=res.products_touched,
+                review=[ReviewItem(**r) for r in res.review],
+            )
 
     # ---- read a product's offer history ----
     @app.get("/products/{ean}/offers", response_model=ProductOffersOut)

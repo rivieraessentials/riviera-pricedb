@@ -289,3 +289,23 @@ def rebuild_current_best(conn: sqlite3.Connection, product_ids: list[int] | None
 
 def get_current_best(conn: sqlite3.Connection, product_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM current_best WHERE product_id = ?", (product_id,)).fetchone()
+
+
+# ---------------------------------------------------------------- review queue
+
+def add_review_item(conn: sqlite3.Connection, batch_id: int | None, ean: str | None,
+                   reason: str, raw_row: dict | str | None = None) -> int:
+    raw = raw_row if (raw_row is None or isinstance(raw_row, str)) else json.dumps(raw_row)
+    cur = conn.execute(
+        "INSERT INTO review_queue (batch_id, ean, reason, raw_row) VALUES (?, ?, ?, ?)",
+        (batch_id, ean, reason, raw),
+    )
+    return int(cur.lastrowid)
+
+
+def list_review_items(conn: sqlite3.Connection, batch_id: int | None = None) -> list[sqlite3.Row]:
+    if batch_id is None:
+        return conn.execute("SELECT * FROM review_queue ORDER BY review_id").fetchall()
+    return conn.execute(
+        "SELECT * FROM review_queue WHERE batch_id = ? ORDER BY review_id", (batch_id,)
+    ).fetchall()

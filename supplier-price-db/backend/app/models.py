@@ -56,9 +56,15 @@ class OffersCreate(BaseModel):
     offers: list[OfferIn]
 
 
+class ReviewItem(BaseModel):
+    ean: str | None = None
+    reason: str
+
+
 class OffersCreated(BaseModel):
     offer_ids: list[int]
     products_touched: list[int]
+    review: list[ReviewItem] = []    # rows that could not be safely imported (e.g. >6 decimals)
 
 
 class OfferHistoryItem(BaseModel):

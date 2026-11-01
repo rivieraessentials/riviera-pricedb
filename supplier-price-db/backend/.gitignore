@@ -1,5 +1,6 @@
 # Local dev only — never commit the venv, the SQLite DBs, or real config
 .venv/
+.venv*/
 __pycache__/
 *.pyc
 *.db

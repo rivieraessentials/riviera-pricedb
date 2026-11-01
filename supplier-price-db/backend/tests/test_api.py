@@ -6,7 +6,8 @@ def test_healthz_ok(client):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok" and body["db"] == "ok"
-    assert 1 in body["migrations"]              # 0001_initial applied
+    assert body["migrations"] == [1, 2]         # 0001_initial + 0002_review_queue
+    assert body["environment"] == "development"
     assert body["access_enabled"] is False      # OFF by default in dev
 
 
@@ -45,12 +46,20 @@ def test_duplicate_checksum_warns_via_api(client):
     assert "already imported" in (b2["warning"] or "")
 
 
-def test_no_round_rejected_via_api(client):
+def test_over_precision_row_goes_to_review_via_api(client):
     supplier = client.post("/suppliers", json={"name": "S"}).json()
     batch = client.post("/batches", json={"supplier_id": supplier["supplier_id"],
                                           "currency": "EUR", "fx_rate_eur": "1"}).json()
     r = client.post("/offers", json={
         "batch_id": batch["batch_id"],
-        "offers": [{"ean": "4000000000028", "quoted_price": "1.2345678"}],   # 7dp
+        "offers": [
+            {"ean": "4000000000028", "quoted_price": "1.2345678"},   # 7dp -> review
+            {"ean": "4000000000035", "quoted_price": "9.99"},        # fine -> imported
+        ],
     })
-    assert r.status_code == 422                 # refused, not silently rounded
+    assert r.status_code == 200                 # the file imports; the bad row is NOT a hard failure
+    body = r.json()
+    assert len(body["offer_ids"]) == 1
+    assert len(body["review"]) == 1
+    assert body["review"][0]["ean"] == "4000000000028"
+    assert body["review"][0]["reason"] == "more than 6 decimals: 1.2345678"
