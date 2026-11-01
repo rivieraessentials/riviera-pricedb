@@ -101,35 +101,41 @@ Stand up the `:8001` app, create the SQLite schema from the design doc (products
 suppliers, FX, `current_best`), WAL mode on. No UI yet — just a health check and the data endpoints.
 *Done when:* `curl .../healthz` returns `ok` and the empty DB accepts a test offer via the API.
 
-**Phase 2 — Port the prototype onto the backend (+ one-off data migration).**
-Switch the prototype's storage from the browser (localStorage) to the `:8001` API — same screens, same
-look, but the data now lives on the server, shared and backed-up instead of trapped in one browser.
-**Data migration (explicit step):** the seed data is the dataset **baked into
-`supplier-price-db/prototype.html`** (917 products / 1,443 offers; you confirmed you haven't edited it in
-your browser, so no browser export is needed). A one-off script extracts it (the existing `split.py`) and
-loads it into the SQLite schema — run once, verified by row counts. **Caveat:** the baked seed is already
-2dp-rounded (a prototype limitation, §2.4), so it seeds history at 2dp while Phase-3 imports carry full
-precision — re-import an original file if exact historical precision ever matters. *Done when:* you open
-`prices.rivieraessentials.com`, see your 1,443 offers, and every screen (Offers, Best sellers, Requests,
-Suppliers, Settings) works against the server.
+> **Phase order updated 2026-11-01: ingestion first, then the screen port.** The baked prototype data is
+> 2dp-rounded and part-synthetic (and `prototype.html` is now out of git — data minimisation), so seeding
+> screens from it would be throwaway. Importing the real originals at full precision is the real path and it
+> exercises the money / no-round / review core built in Phase 1. So the old Phase 2 (screen port) and Phase 3
+> (ingestion) are **swapped**.
 
-**Phase 3 — Server-side ingestion + keep every original + the 10-file test.**
-Uploading a file (**`.xlsx`, `.xls` or `.csv`**) POSTs it to the server. Parsing stays in the browser via
-SheetJS (which reads all three and is already tuned on your files); the normalized rows are inserted as new
-offers, **and the original file is stored** under `/data/pricedb/uploads/` (audit + re-processing), with
-its SHA-256 so a duplicate upload warns you. The brand-approval / review-queue flow stays as is. **The
-importer MUST NOT round** — unlike the prototype (2dp price / 4dp EUR), production stores `price_original`
-at **full quoted precision** (integer minor units, §12 O5) and computes per-piece/EUR on read. This is
-where the design's **10-file importer test (§7)** runs — on your **8 supplied files now**, plus 2 more to
-collect — *before* the review screens and CRM link depend on it. The test files cover the header-naming
-variety already seen: price columns are **not** always called "price" — real headers include **`OFFER`**
-(clarins, clinique), **`PRICE (USD_`** (La Roche Posay), **`USD`** (HongKong) and **`Price Euros`**
-(it's-a-10). **Note:** the scan script's keyword auto-detection ([scripts/price_decimal_scan.py](scripts/price_decimal_scan.py))
-is a throwaway investigation aid, **not** the importer — it missed `OFFER` and latched onto title cells. The
-**importer uses explicit per-supplier column mappings** (set once in the wizard, §2.3, remembered per
-supplier), never keyword guessing. *Done when:* each real file lands correct offers (incl. an `OFFER`-headed
-file), the raw file is retrievable, the review queue stays small, **a 3-decimal price round-trips through
-import unchanged**, and the full stored value plus the supplier's on-screen text are both captured (§2.4 pt 6).
+**Phase 2 — Server-side ingestion (data-minimised) + the 10-file test.**
+Uploading a file (**`.xlsx`, `.xls` or `.csv`**) is parsed **in the browser** via SheetJS (reads all three,
+already tuned on your files). **Data minimisation (§2.8):** the browser reads **only rows below the detected
+header and only the mapped columns**, and POSTs **only those normalized rows** — unmapped columns and any
+contact block above/below the table never leave the browser. `raw_row` keeps only the mapped columns (+ price
+display text/format, §2.4 pt 6). `offer_batches.source_file` is a **neutral reference** (`supplier + date +
+sha256-prefix`), **never the filename**. Logs record counts/reasons only, never cell values. **The importer
+MUST NOT round** — production stores `price_original` at full precision (integer minor units, §12 O5) and a
+row needing **>6 decimals routes to the review queue** (reason "more than 6 decimals: …"), it does not fail
+the file. **Original uploaded files:** retention is **O7 (§12)** — default keep-N-days placeholder, not kept
+indefinitely. The **importer uses explicit per-supplier column mappings** (§2.3), never keyword guessing (the
+scan script's auto-detect was a throwaway aid that missed `OFFER` and latched onto title cells). This is where
+the design's **10-file importer test (§7)** runs, on **SYNTHETIC test files only** (real supplier files are
+never committed — §2.8). The synthetic set covers the header-naming variety seen in real files — price
+columns are not always "price": **`OFFER`**, **`PRICE (USD_`**, **`USD`**, **`Price Euros`**. **Data-minimisation
+test (§2.8 / design item 7):** a synthetic file with a **contact block above the header, a sales-rep column,
+and a person's name in the filename** imports the price rows and asserts **none** of that personal data appears
+**anywhere** in the DB — all tables, all columns, including `raw_row` and `source_file`. *Done when:* synthetic
+files land correct offers (incl. an `OFFER`-headed file); a 3-decimal price round-trips unchanged; the full
+stored value **and** the on-screen text are both captured (§2.4 pt 6); a >6-decimal row goes to review; and the
+contact-block test passes (zero personal data stored).
+
+**Phase 3 — Port the prototype screens onto the backend.**
+Switch the prototype's screens from browser `localStorage` to the `:8001` API — same look, but the data now
+lives on the server, shared and backed-up. **No baked-data migration:** real supplier pricing enters via
+**Phase 2 ingestion from the original files** (full precision), not from the 2dp-rounded baked seed, and
+`prototype.html` is out of git. Dev and demos use **synthetic data only**. *Done when:* you open
+`prices.rivieraessentials.com` and every screen (Offers, Best sellers, Requests, Suppliers, Settings) works
+against the server.
 
 **Phase 4 — Backups, off-site, and offline downloads (the "never lose it" phase).** *(details in §5)*
 
@@ -208,15 +214,18 @@ you find out backups are good *before* you ever need them, not after.
 **Decided (2026-10-31):** address = **`prices.rivieraessentials.com`**; file types **.xlsx/.xls/.csv**
 (SheetJS self-hosted + SRI, Apache-2.0); offline copy = **download button + weekly reminder** (auto-pull
 later); **systemd for the price DB** (the CRM's supervision is referenced to its Stage 1 Part D, not done
-here); two Access emails (main + Gmail) + Gmail as second Cloudflare admin; seed data from the baked-in
-prototype; money as **integer minor units at 6 decimals / ×1,000,000** (importer must NOT round — full
-precision stored; raw-file scan 2026-11-01 found suppliers quoting up to 4dp, so 6dp for headroom), FX rates
-stored **as TEXT** (Python `Decimal` math), derived EUR/per-piece **computed on read** (design §12 O5).
+here); two Access emails (main + Gmail) + Gmail as second Cloudflare admin; money as **integer minor units at
+6 decimals / ×1,000,000** (importer must NOT round — full precision stored; raw-file scan 2026-11-01 found
+suppliers quoting up to 4dp, so 6dp for headroom), FX rates stored **as TEXT** (Python `Decimal` math),
+derived EUR/per-piece **computed on read** (design §12 O5); **data minimisation — the price DB holds NO
+personal data, business data only incl. the supplier COMPANY name (§2.8)**; **phase order: ingestion first,
+then the screen port** (no baked-data migration — real data enters via ingestion of originals, dev/tests use
+synthetic data).
 
-**Still open (awaiting input, ~1–2 days)** — design §12: CRM link direction (a/b/c), offer freshness rule,
-quantities, FX default view. The schema reserves for all of these, so **Phases 1–4 can start now** and none
-needs a later migration. Phase 5 (CRM link) waits on the direction; `current_best`'s freshness rule is a
-configurable setting until you decide.
+**Still open (awaiting input, ~1–2 days)** — design §12: CRM link direction (a/b/c, O1), offer freshness rule
+(O2), quantities (O3), FX default view (O4), displayed-vs-stored price (O6), original-file retention (O7).
+The schema reserves for all of these, so **Phases 1–4 can start now** and none needs a later migration. Phase
+5 (CRM link) waits on the direction; `current_best`'s freshness rule is a configurable setting until you decide.
 
 None of this is one-way: every phase is a small, reversible, rehearse-then-verify step, and after cutover
 each change is a one-file redeploy that never touches your data.

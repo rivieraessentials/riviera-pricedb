@@ -16,6 +16,7 @@ A standalone price-intelligence tool that ingests supplier offers (**Excel files
 2. **Offers are immutable history.** You never edit a price; a new offer is a new row (a new "column" in the Excel-like view). This is what makes "compare past and future offers" work.
 3. **Store the original, derive the comparison.** Keep every figure exactly as the supplier quoted it (currency, pack, price). Compute EUR and per-piece values on top, reproducibly, never destroying the original.
 4. **The CRM is read-only to us.** We never modify how it saves; any link is read-only toward the CRM (§5 — the draft-file idea was withdrawn after reading the CRM's import code).
+5. **Data minimisation — the price DB holds NO personal data (added 2026-11-01).** Business data only: EAN, prices, product details (description, size, brand, pieces/box, basis, currency) and the supplier's **COMPANY** name. No contact persons, no personal emails/phones, no names of individuals. Supplier offer files often carry a contact block or a sales-rep column; none of that enters the system. The concrete rules are in **§2.8**; the one place an original file could transiently hold personal data (the kept upload) is governed by open decision **O7 (§12)**.
 
 ---
 
@@ -54,7 +55,8 @@ offer_batches               -- one batch = one "column" in the grid = one suppli
   currency        TEXT      -- EUR/GBP/USD/SGD/CAD/HKD (batch default; can vary per line)
   territory       TEXT      -- T1 / T2 for this batch (distinction only, no VAT math)
   kind            TEXT      -- 'price list' | 'stock offer' | ... (a supplier can have many)
-  source_file     TEXT      -- original filename, kept for audit
+  source_file     TEXT      -- NEUTRAL reference only: "<supplier> <received_date> <sha256-prefix>" (§2.8).
+                            -- NEVER the original filename (filenames often contain a person's name). Data minimisation.
   source_sha256   TEXT      -- checksum of the uploaded file; a re-upload of the same bytes warns "already imported" (§2.1)
   fx_rate_eur     TEXT      -- the import-date rate, stored EXACTLY as published (DECIDED O5 §12: TEXT; all FX math in Python Decimal). see §4
   fx_source       TEXT      -- 'frankfurter' | 'ecb' | 'manual'
@@ -73,8 +75,10 @@ offers                      -- APPEND-ONLY price history. one row per (batch, pr
   -- NOTE (O5 §12): price_eur and unit_price_eur are NO LONGER stored here. EUR and per-piece values are
   -- COMPUTED ON READ from price_original + currency + the batch's fx_rate + pieces_per_box + price_basis.
   -- (Per-piece is a division result — inherently rounded — so it is never stored as a source of truth.)
-  raw_row         TEXT      -- JSON of the original parsed row, for audit/review; for price cells keeps BOTH
-                            -- the formatted text the supplier saw (SheetJS .w) and the number format (.z), §2.4 pt 6
+  raw_row         TEXT      -- JSON of ONLY the MAPPED columns of the row (EAN, price(s), description, size,
+                            -- pieces/box, basis, currency) — NEVER the whole row. For price cells also keeps the
+                            -- displayed text (SheetJS .w) + number format (.z), §2.4 pt 6. Unmapped columns
+                            -- (incl. any contact/sales-rep column) are dropped at parse time, §2.8.
   available_qty   INTEGER   -- nullable; stock quantity if the offer states it (OPEN decision §12 — reserved now, unused until decided)
   moq             INTEGER   -- nullable; minimum order quantity if stated (OPEN decision §12)
   valid_until     DATE      -- nullable; offer expiry if stated (feeds the freshness rule, OPEN decision §12)
@@ -227,12 +231,15 @@ Each review item carries the **reason** and the original row, so you're correcti
 
 Accepted: **`.xlsx`, `.xls`, `.csv`** (manual drop; PDF remains dropped, §11).
 
-**Recommended architecture — parse in the browser, store the original on the server.** The prototype already
+**Recommended architecture — parse in the browser, send only minimised data.** The prototype already
 parses all three formats client-side with **SheetJS** (xlsx 0.18.5), which reads `.xlsx`, `.xls` and `.csv`
-alike, and its column-detection is already tuned on your real files. The production app keeps that: the
-browser parses the file and POSTs (a) the **normalized rows** and (b) the **original file** to the server,
-which stores the original under `/data/pricedb/uploads/` (audit + re-import) and appends the offers. This
-reuses proven code and makes the server-side `.xls` library question moot.
+alike, and its column-detection is already tuned on your real files. The production app keeps that, with
+data minimisation (§2.8): the browser parses the file, reads **only rows below the detected header and only
+the mapped columns**, and POSTs **only those normalized rows** — unmapped columns and any contact block
+above/below the table are dropped in the browser and never sent. The **original file is a separate, optional
+upload** whose retention is governed by **O7 (§12)**: because it still contains everything (incl. any contact
+block), it is NOT kept indefinitely by default. Parsing client-side also makes the server-side `.xls` library
+question moot.
 
 **Build requirement for SheetJS.** SheetJS Community Edition is **Apache-2.0**, and its official docs name
 **`cdn.sheetjs.com` as the authoritative source** (current version **0.20.3**); the docs install from that
@@ -257,6 +264,29 @@ validate type and size, parse defensively, never execute an upload, keep the ori
 Official confirmation (not blog tutorials): openpyxl rejects `.xls` with `InvalidFileException` and accepts
 only `.xlsx/.xlsm/.xltx/.xltm` — [openpyxl docs](https://openpyxl.readthedocs.io/); xlrd 2.0.0 (Dec 2020)
 removed everything except `.xls` — [xlrd changelog](https://xlrd.readthedocs.io/en/latest/changes.html).
+
+### 2.8 Data minimisation (no personal data in the price DB)
+
+The price DB stores **business data only** (core principle 5). Concretely, enforced by the importer:
+
+1. **Mapped columns only into the DB.** `raw_row` holds only the mapped columns (EAN, price(s), description,
+   size, pieces/box, basis, currency) plus the price display text/format (§2.4 pt 6) — **never the whole row.**
+   Unmapped columns are dropped **at parse time in the browser** and never sent to the server.
+2. **Read only the table.** The importer reads **only rows below the detected header row** and **only mapped
+   columns**. A contact block, letter or signature **above or below** the table (names, emails, phone numbers)
+   never enters the system.
+3. **Neutral source reference.** `offer_batches.source_file` stores a neutral reference —
+   `"<supplier company> <received_date> <sha256-prefix>"` — **never the original filename** (filenames often
+   embed a person's name, e.g. a sales rep).
+4. **Free-text fields** (`notes`, `label`): the UI shows the hint **"business info only — no personal details"**
+   next to each free-text input.
+5. **Logging.** Logs record **counts and reasons only** (e.g. "batch 7: 142 offers, 3 to review: EAN checksum").
+   **Never** log row contents or cell values.
+6. **Original uploaded files** may still contain a contact block, so their retention is **open decision O7
+   (§12)** — not kept indefinitely by default.
+
+Supplier identity is the **company** name only (a `suppliers` row); there is no field anywhere for a supplier
+contact person.
 
 ---
 
@@ -380,15 +410,15 @@ Net: a **separate program** (separate code, separate data, CRM save path untouch
 
 ---
 
-## 7. Test plan — prove the importer on 10 real files (runs as build **Phase 3**)
+## 7. Test plan — prove the importer on synthetic fixtures (runs as build **Phase 2**)
 
-The goal is to lock the data model and the importer against real-world mess. **This runs during Phase 3 of the build** (server-side ingestion), **before** the review screens, `current_best`, and any CRM link depend on its output — not as a separate pre-build project.
+The goal is to lock the data model and the importer against real-world mess. **This runs during Phase 2 of the build** (server-side ingestion, now the first build phase), **before** the review screens, `current_best`, and any CRM link depend on its output.
 
-**File count reconciled:** you supplied **8** real files (univi.net.pl = Wella + Elemis; DnA Trade = Phyto + Biotherm + Bioderma; Go Pro Now = Eucerin; Rexaline; Lierac; Caudalie). Run the test on those **8 now**, and **collect 2 more** (ideally a legacy `.xls` and a non-EUR price list) to reach the target **10** before Phase 3 is signed off.
+**Synthetic fixtures only (data minimisation — §2.8 and the git rule).** No real supplier or customer file is committed or used in the automated tests. The committed fixtures are **synthetic files that reproduce the shapes seen in the real files**: multi-tab, mixed-brand tabs, a per-box basis column, multiple price columns, non-EUR currencies (GBP/USD/SGD), the header-name variety (`OFFER` / `PRICE (USD_` / `USD` / `Price Euros`), and the **data-minimisation case** (a contact block above the header, a sales-rep column, and a person's name in the filename — asserting none of it is stored). The real shapes were observed locally from **8** supplier files (univi.net.pl = Wella + Elemis; DnA Trade = Phyto + Biotherm + Bioderma; Go Pro Now = Eucerin; Rexaline; Lierac; Caudalie); the fixtures mirror those characteristics **without the real data**. **Optional local acceptance:** you may run the importer against your real files on your own machine for confidence — those files are never committed.
 
-1. **Use** the 8 supplied files + 2 to-be-collected, spanning the range: some multi-tab, some mixed-brand tabs, some with a per-box basis column, some with multiple price columns, and some in non-EUR currencies (GBP/USD/SGD/etc.).
-2. **Hand-label** a ground-truth extraction for a sample of rows per file (correct EAN / description / size / pieces / basis / price). This is what correctness is measured against.
-3. **Prototype the importer only** (not the whole app): run the §2 pipeline over all 10, output rows + the review queue.
+1. **Use ~10 synthetic fixtures** spanning the range above (multi-tab, mixed-brand, per-box basis, multi price-column, non-EUR), plus a legacy `.xls` shape and the data-minimisation case.
+2. **Hand-label** a ground-truth extraction for a sample of rows per fixture (correct EAN / description / size / pieces / basis / price). This is what correctness is measured against.
+3. **Prototype the importer only** (not the whole app): run the §2 pipeline over all fixtures, output rows + the review queue.
 4. **Measure, per file and per supplier:**
    - row-level correctness and how many rows landed in the review queue and why;
    - locale / multi-price handling (did "lowest price" pick correctly?);
@@ -457,7 +487,7 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 11. **File types (2026-10-31):** accept **`.xlsx`, `.xls`, `.csv`**. Readers verified in §2.7 (openpyxl does **not** read `.xls`; xlrd does) — recommended path parses in-browser with SheetJS, which reads all three. → §2.7, §6.
 12. **Offline copy (2026-10-31):** a **download button in the app** (SQLite file + a plain Excel/CSV export) + a **weekly calendar reminder**. An **automatic scheduled pull to your computer is a possible later improvement**, noted not built. → §6.
 13. **Process supervision (2026-10-31):** the price DB runs under **its own systemd unit** (`Restart=always`, enabled). The **CRM's** supervision is the roadmap's **Stage 1 Part D** (watchdog-without-sudo, or systemd if sudo) — **LED-0048** (defect) / **LED-0078** (fix, P5); the 2026-10-30 probe confirms it's **not yet done** (unit exists but inactive; manual `nohup`). The price-DB build **references** that item; it does not do the CRM's. → §6.
-14. **Prototype data source (2026-10-31):** seed data is the dataset **baked into `supplier-price-db/prototype.html`** (917 products / 1,443 offers); you confirmed you have not edited it in your browser, so no browser export is needed. → Build Plan Phase 2.
+14. **Prototype data source — SUPERSEDED (2026-11-01):** the earlier plan to seed from the dataset baked into `supplier-price-db/prototype.html` (917 products / 1,443 offers) is dropped. Data minimisation + the git rule put `prototype.html` out of git; real supplier pricing now enters via **Phase 2 ingestion of the original files** (full precision), and dev/tests use **synthetic data only**. The screen port (now Phase 3) does no baked-data migration.
 15. **Cloudflare Access — two emails + second admin (2026-10-31):** one shared Access policy admits **two emails** (your main + a Gmail backup on a different provider) for both apps, and the Gmail is also added as a **second admin member** on the Cloudflare account. Steps in [SUBDOMAIN_SETUP_RUNBOOK.md](SUBDOMAIN_SETUP_RUNBOOK.md) + the recovery checklist in [BACKUP_SYSTEM.md](BACKUP_SYSTEM.md). → §6.
 16. **FX storage (2026-10-31):** keep **both** the import-date rate (on the batch) **and** the daily `fx_rates` table, so either comparison basis is computable without migration. → §4.2, §12.
 
@@ -465,7 +495,7 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 
 ## 12. Open decisions — schema already built so none needs a later migration
 
-**O1–O4 and O6 are the END USER's** (the business owner) — awaiting their input, ~1–2 days. **O5 is the DEVELOPER's** (Ted) — decided below (price scale 6dp, FX TEXT). All are **deliberately unset in code**; the schema reserves for every outcome, so choosing later is config, not migration.
+**O1–O4, O6 and O7 are the END USER's** (the business owner) — awaiting their input, ~1–2 days. **O5 is the DEVELOPER's** (Ted) — decided below (price scale 6dp, FX TEXT). All are **deliberately unset in code**; the schema reserves for every outcome, so choosing later is config, not migration.
 
 | # | Decision | Reserved so no migration is needed | Trade-off (for when you decide) |
 |---|---|---|---|
@@ -474,6 +504,7 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 | O3 | **Quantities** (available qty / MOQ) | `offers.available_qty`, `offers.moq` (nullable, present now, unused) | including them lets "best price" respect stock/MOQ (more decision-useful) vs price-only (simpler; can rank an unbuyable price first). |
 | O4 | **FX default view** (import-date rate vs today's) | both rates stored (§4.2) | import-date = stable/reproducible; today = reflects current cost. Only the *default* is unset; both views work. |
 | O6 | **Displayed vs stored price** — when a supplier's file *shows* `$18.00` but the cell *holds* `18.0037` (real cases: HongKong USD, it's-a-10 EUR; §2.4 pt 6), which figure is authoritative for comparison and for offers? | importer keeps **both** the full stored value (`price_original`, 6dp) and the formatted text the supplier saw (`raw_row`, §2.4 pt 6) — so either can be chosen without re-importing | stored full value = exact, matches what they'd invoice if they bill at full precision; displayed value = what the supplier "quoted" to the eye, matches a 2dp paper price list. Likely a per-supplier setting (some round on screen, some don't). **Not decided — needs the end user.** |
+| O7 | **Original uploaded files — retention** (the original may contain a contact block / personal data; §2.8) | `settings.upload_retention` + `settings.upload_retention_days`; stored under `/data/pricedb/uploads/` | (a) **don't keep** — parse in browser, never store the original (strongest minimisation; loses "re-run history from the original file"); (b) **keep N days then auto-delete** (re-import window, then gone); (c) **keep indefinitely** (full re-run, but holds personal data indefinitely). **Trade-off:** keeping originals enables *re-running import history from source* if parsing logic improves; not keeping means a mapping fix can only apply to future files. **Note:** a deleted original still lives in restic backups until pruned — and the repo is **append-only**, so a prune must be run from a trusted machine with full credentials (§6). **Default until decided: (b), with N a configurable PLACEHOLDER** (`upload_retention_days`, marked placeholder like `freshness_rule`). **Needs the end user.** |
 
 ### O5 — Money & rate representation (DEVELOPER decision — Ted, not the end user)
 
