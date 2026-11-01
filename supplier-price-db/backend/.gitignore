@@ -1,0 +1,10 @@
+# Local dev only — never commit the venv, the SQLite DBs, or real config
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+config.toml
+.pytest_cache/
+data/

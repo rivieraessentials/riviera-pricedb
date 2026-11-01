@@ -1,0 +1,32 @@
+# Price DB backend configuration — EXAMPLE.
+# Copy to config.toml (gitignored) and edit. Nothing here is hardcoded in the app;
+# config.toml (or PRICEDB_* env vars) is the single source. See app/config.py.
+
+[server]
+host = "127.0.0.1"   # bind localhost ONLY — the app is never exposed directly (Cloudflare fronts it)
+port = 8001
+
+[database]
+path = "data/pricedb.db"   # relative to the backend dir; created on first run
+
+# Identity allow-list. Cloudflare Access is the real gate; this is defence-in-depth.
+# Holds any number of addresses (not limited to two). Compared case-insensitively.
+[identity]
+allowed_emails = [
+    "owner@example.com",      # placeholder — replace with the real main address
+    "backup@example.com",     # placeholder — replace with the Gmail backup address
+]
+
+# Cloudflare Access JWT verification. OFF by default for local development.
+# Turn on only on the server, once the Access application exists and you have its AUD tag.
+# What it needs when enabled (verified against Cloudflare's official docs, 2026-11-01):
+#   team_name -> issuer  https://<team_name>.cloudflareaccess.com
+#               JWKS     https://<team_name>.cloudflareaccess.com/cdn-cgi/access/certs
+#   aud_tag   -> the Access application's Application Audience (AUD) tag
+#   token in  -> request header  Cf-Access-Jwt-Assertion  (algorithm RS256)
+#   claims checked: aud == aud_tag, iss == issuer, exp (not expired), then email in allow-list
+[access]
+enabled = false
+team_name = ""   # e.g. "rivieraessentials"  (NOT the full URL)
+aud_tag = ""     # from Zero Trust > Access > Applications > your app > Application Audience (AUD) Tag
+dev_identity = "dev@localhost"   # identity used when enabled = false (local dev only)
