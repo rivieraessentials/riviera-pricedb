@@ -65,8 +65,8 @@ offers                      -- APPEND-ONLY price history. one row per (batch, pr
   offer_id        PK
   batch_id        FK
   product_id      FK
-  price_original  INTEGER   -- the LOWEST quoted price, as INTEGER MINOR UNITS at a fixed scale (O5 §12; NEVER float).
-                            -- scan 2026-10-31: quoted prices are ≤2 decimals in all 16 batches; scale chosen with margin (≥4dp / ×10,000 proposed).
+  price_original  INTEGER   -- the LOWEST quoted price, as INTEGER MINOR UNITS at scale ×1,000,000 / 6 decimals (O5 §12; NEVER float).
+                            -- raw-file scan 2026-11-01: suppliers quote up to 4 decimals (it's-a-10 EUR list, HongKong USD) → 6dp chosen for headroom.
   currency        TEXT      -- usually = batch currency, but stored per-row for safety
   pieces_per_box  INTEGER   -- the case pack AS QUOTED in this offer (can differ per supplier)
   price_basis     TEXT      -- 'per_piece' | 'per_box' — read from the file's basis column (§1.2)
@@ -474,20 +474,20 @@ This reuses the whole stack: same EAN identity, same `current_best`, same curren
 
 ### O5 — Money & rate representation (DEVELOPER decision — Ted, not the end user)
 
-Direction decided 2026-10-31. **FX representation is fully decided (TEXT);** the **price scale is decided pending the raw-file scan** (4dp, →6dp if 3+). Grounded in a read-only decimal scan of the 16 baked batches:
+Direction decided 2026-10-31; **price scale finalised 2026-11-01** after the raw-file scan. **FX representation: TEXT. Price scale: 6 decimals (×1,000,000).**
 
-- **Quoted prices: the baked-data scan is UNRELIABLE for this.** The prototype's parser **rounds the chosen price to 2 decimals** before storing it (`price:Math.round(Math.min(...ps)*100)/100`, [prototype.html:252](supplier-price-db/prototype.html)), and EUR to 4dp (:606). So the "≤2dp across all 16 batches" the scan reported only reflects **that rounding**, not what suppliers actually quote. The true decimal count **must** come from the **raw files** (corrected scan script provided). Until that runs, the price scale is provisional.
+- **Quoted prices: raw-file scan (2026-11-01) shows suppliers quote up to 4 decimals.** The baked-data scan was unusable here — the prototype's parser **rounds the chosen price to 2 decimals** before storing it (`price:Math.round(Math.min(...ps)*100)/100`, [prototype.html:252](supplier-price-db/prototype.html)) and EUR to 4dp (:606), so its "≤2dp" only reflected that rounding. The corrected raw-file scan ([scripts/price_decimal_scan.py](scripts/price_decimal_scan.py)) over the real files found: clarins, clinique, La Roche Posay = **2dp**; **it's-a-10 UK `Price Euros` = 4dp across its whole list** (e.g. 3.9325, 20.2675, 16.6375 — GBP→EUR converted); **HongKong `USD` = 4dp** on 7 values (18.0037, 4.8477, 12.4982…). Max observed = **4 decimals**. Per the pre-agreed rule (3+ decimals → 6dp) the scale is **6 decimals (×1,000,000)**: ×10,000 would hold 4dp exactly but leaves **zero** headroom, and the 4dp values are FX-conversion results — a different rate easily yields 5dp, which the no-round rule (§2.4) forbids us to truncate. 6dp costs nothing (int64 holds ×10⁶ prices with ~8 orders of magnitude to spare) and removes any future scale migration.
 - **FX rates: up to 5 decimals** (EUR 1.0, USD 1.1253, GBP **0.84385**, SGD 1.4395, CAD 1.5935, HKD 8.8316 — ECB's ~5-significant-figure convention).
 
 | Field | Decision | Representation | Note |
 |---|---|---|---|
-| `price_original` (quoted price) | **integer minor units**, never float — **DECIDED: 4 decimals (×10,000), pending raw scan** | **→ 6 decimals (×1,000,000) if the corrected raw-file scan shows any supplier quoting 3+ decimals** | the baked scan can't confirm this (parser rounds to 2dp, above), so the raw scan is the gate |
+| `price_original` (quoted price) | **integer minor units**, never float — **DECIDED: 6 decimals (×1,000,000)** | integer, e.g. `3.9325` → `3932500` | raw scan 2026-11-01 found 4dp quotes (it's-a-10, HongKong); 6dp gives headroom over the FX-converted values and honours the no-round rule (§2.4) |
 | `fx_rate_eur`, `fx_rates.rate` | **DECIDED: TEXT, exactly as published**; all FX math in **Python `Decimal`** | exact string, e.g. `"0.84385"` | chosen because EUR is computed in Python, not SQL (below) |
 | `price_eur`, `unit_price_eur` | **computed on read, not stored** per offer row | — | `current_best` remains the **only** rebuildable cache |
 
 **FX storage trade-off:** *text* stores exactly what ECB published at any precision and never drifts, but each arithmetic step must parse to `Decimal` (no direct SQL math); *high-scale integer* (e.g. rate ×10⁸) is exact to that scale and allows integer SQL math, but fixes precision at the chosen scale up front. Either satisfies "never float."
 **Where EUR is computed (drove the choice):** EUR is computed **in Python at import** (inserting offers and maintaining `current_best`), and the cross-currency comparison grid **sorts on the precomputed `current_best` integer** — so there is **no bulk rate-multiplication inside ad-hoc SQL**. The only thing that might do SQL-side rate math is a future "recompute at today's rate" across many rows (O4). **Decision:** FX rates are stored as **TEXT** and all FX math runs in **Python `Decimal`**; this is exact at any published precision and never drifts. (Scaled integer was the alternative, needed only for SQL-side conversion without CAST-to-float — not the case here.)
-**Why integer minor units for prices:** the roadmap rule is *money in integer cents / exact decimal, never float* (LED-1159 #5, RESTART_PLAN §SQLite). Plain 2-dp cents is too tight for sub-cent per-piece prices; a fixed higher scale keeps the quoted value exact and defers the inevitable rounding to the computed per-piece value.
+**Why integer minor units for prices:** the roadmap rule is *money in integer cents / exact decimal, never float* (LED-1159 #5, RESTART_PLAN §SQLite). Plain 2-dp cents is too tight — suppliers already quote 4dp (above) and per-piece math produces more — so the scale is fixed at **6 decimals (×1,000,000)**, which keeps the quoted value exact and defers the inevitable rounding to the computed per-piece value.
 
 ---
 

@@ -203,7 +203,8 @@ you find out backups are good *before* you ever need them, not after.
 (SheetJS self-hosted + SRI, Apache-2.0); offline copy = **download button + weekly reminder** (auto-pull
 later); **systemd for the price DB** (the CRM's supervision is referenced to its Stage 1 Part D, not done
 here); two Access emails (main + Gmail) + Gmail as second Cloudflare admin; seed data from the baked-in
-prototype; money as **integer minor units** (importer must NOT round — full precision stored), FX rates
+prototype; money as **integer minor units at 6 decimals / ×1,000,000** (importer must NOT round — full
+precision stored; raw-file scan 2026-11-01 found suppliers quoting up to 4dp, so 6dp for headroom), FX rates
 stored **as TEXT** (Python `Decimal` math), derived EUR/per-piece **computed on read** (design §12 O5).
 
 **Still open (awaiting input, ~1–2 days)** — design §12: CRM link direction (a/b/c), offer freshness rule,
