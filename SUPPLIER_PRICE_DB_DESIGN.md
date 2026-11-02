@@ -56,9 +56,12 @@ offer_batches               -- one batch = one "column" in the grid = one suppli
   currency        TEXT      -- EUR/GBP/USD/SGD/CAD/HKD (asked on the upload form)
   territory       TEXT      -- 'T1' (non-European) | 'T2' (European) — set per upload. Label/filter only, no VAT math.
   kind            TEXT      -- 'price_list' | 'stock_offer'. A structured two-option field (NOT free text).
-                            -- Drives the freshness rule (§3.3 / O2). See FLAG in §2.1 re: the prototype.
-  moq             INTEGER   -- minimum order quantity, an INTEGER typed by the owner on the upload form,
-                            -- for BOTH kinds. Displayed only; never affects ranking (O3 decided — §12).
+                            -- Drives the replacement rule (§3.3 / O2). See FLAG in §2.1 re: the prototype.
+  moq             TEXT      -- minimum order quantity, FREE TEXT typed by the owner on the upload form
+                            -- (e.g. "6240 pcs", "€25,000"), for BOTH kinds. DISPLAY-ONLY: never parsed,
+                            -- never used in ranking (O3 — §12, updated 2026-11-02 integer -> text).
+  lead_time       TEXT      -- free text (e.g. "2-3 weeks"). UI hint: "business info only — no personal details".
+  notes           TEXT      -- free text. UI hint: "business info only — no personal details".
   ended_at        DATE      -- nullable; stock offers only. Set by the "End offer" action (§8). While NULL a
                             -- stock offer counts; once set it stops counting. Price lists ignore this (O2).
   source_sha256   TEXT      -- checksum of the uploaded file; a re-upload of the same bytes warns
@@ -99,9 +102,10 @@ current_best                -- MAINTAINED cache: cheapest LIVE offer per product
   best_unit_price_eur  INTEGER  -- per-piece EUR as minor units; a DERIVED, rebuildable cache value (the ONLY stored cache — O5 §12)
   best_supplier_id FK
   updated_at
-  -- "LIVE" is now DECIDED (O2, §3.3): for each (supplier, kind) the most recent batch counts; a newer price
-  -- list replaces that supplier's previous price list, a newer stock offer replaces the previous stock offer,
-  -- and a stock offer stops counting once ended_at is set. No age-based expiry, no age warnings.
+  -- "LIVE" is DECIDED (O2, §3.3): replacement is per (supplier, BRAND, kind). A newer price list replaces that
+  -- supplier's previous price list FOR THE SAME BRAND only; a newer stock offer replaces that supplier's
+  -- previous stock offer for the same brand only; different brands never replace each other. A stock offer
+  -- stops counting once ended_at is set. No age-based expiry, no age warnings.
 
 settings                    -- small key/value config, editable in the UI. Examples:
   key             TEXT PK   --   'fx_display_basis' ('today' default | 'import_date'), 'display_currency' (EUR),
@@ -140,10 +144,10 @@ file you drop in (.xlsx / .xls / .csv)
         │
         ▼
  [2] per-file import wizard — you set, once per upload (matches the prototype's form, §2.2):
-       • Supplier (company) *        • Brand (single, multi-brand-from-file, or new)
+       • Supplier (company) *        • Brand: single (from the form) | multi-brand (by existing EAN)
        • Territory T1/T2 *           • Currency
        • Offer date                 • Offer type: price list | stock offer
-       • MOQ (integer)
+       • MOQ (free text) · Lead time (free text) · Notes (free text)
         │
         ▼
  [3] column mapping → EAN, description, price(s), and pieces/box ONLY when a per-box row must be divided
@@ -157,7 +161,7 @@ file you drop in (.xlsx / .xls / .csv)
         └─ uncertain / failed validation ─► REVIEW LIST (never silently imported)
         │
         ▼
- [5] mark this supplier's previous batch of the same kind as replaced; recompute current_best (§3.3)
+ [5] for each brand in this upload, supersede this supplier's previous offer of the SAME brand+type; recompute current_best (§3.3)
 ```
 
 Nothing is destructive: an import only ever **appends** offers and **creates** products; a newer price list / stock offer from a supplier simply **replaces** the previous one of that kind for ranking purposes (§3.3), without deleting history. **Duplicate guard:** the SHA-256 of each uploaded file is stored on its batch (`source_sha256`); dropping a file whose checksum was already imported shows a **"this exact file was already imported on &lt;date&gt;"** warning. The file's **bytes are then discarded** — only the hash is kept (O7).
@@ -166,13 +170,13 @@ Nothing is destructive: an import only ever **appends** offers and **creates** p
 
 ### 2.2 Why an import wizard, not silent auto-import
 
-Because brand names are often missing and files mix brands, a fully automatic importer would guess wrong and quietly corrupt your rankings. The wizard front-loads the things only you know — **supplier, brand, territory, currency, offer date, offer type, MOQ** — once per file, then does the row-level work automatically and sends only genuinely ambiguous rows to a review list. This is exactly the prototype's "Import offer" wizard (supplier, brand, territory, currency, received date, notes, lead time, MOQ); the decided model keeps those fields, makes **offer type** a structured choice, and makes **MOQ an integer** (see FLAGs in §2.1 and §11).
+Because brand names are often missing and files mix brands, a fully automatic importer would guess wrong and quietly corrupt your rankings. The wizard front-loads the things only you know — **supplier, brand, territory, currency, offer date, offer type, MOQ** — once per file, then does the row-level work automatically and sends only genuinely ambiguous rows to a review list. This is exactly the prototype's "Import offer" wizard (supplier, brand, territory, currency, received date, notes, lead time, MOQ); the decided model keeps those fields and makes **offer type** a structured choice, while **MOQ, lead time and notes stay free text** (O3; §11 items 26–27) and **brand always comes from the form, never from a file column** (§2.5).
 
 ### 2.3 Multi-tab Excel
 
-**Follows the prototype:** `parseWorkbook` reads **every worksheet and concatenates all their rows into one offer batch** (one upload = one column). Tabs are not separate columns, and brand is **not** taken per tab. Within that single merged set, brand is resolved per row (§2.5): either the one brand you chose for the upload, or — for a mixed-brand file — the brand read from a **brand column** in the file.
+**Multi-tab workbooks still merge into one batch** (one upload = one column): every worksheet's rows are read and concatenated. Tabs are **not** separate columns, and brand is **never** taken from a tab. Brand comes from the upload form and resolves per §2.5 — never from the file.
 
-> **FLAG — the prototype does not support "one brand per tab."** If a real supplier ever sends a workbook with **one brand per sheet and no brand column**, the prototype would merge them all under a single chosen brand. Not decided here; if that case appears, the options are (a) ask the owner to add a brand column, or (b) add per-sheet brand selection to the wizard. Raised, not decided.
+> **Tab-per-brand workbooks are NOT supported** (decided 2026-11-02) — and not needed. A workbook that puts one brand per sheet, with no other brand signal, is handled like any multi-brand upload: each row's brand is taken from the existing product by EAN (§2.5), and unknown EANs go to the review list with a clear reason.
 
 ### 2.4 "Always take the lowest price", then round to 2 decimals
 
@@ -186,18 +190,15 @@ A file may show several price columns (retail, wholesale, other). Rule, applied 
 
 > This **replaces** the earlier "importer must not round / keep displayed text (.w/.z)" rule and closes **O6**. Because every stored price is already a clean 2dp figure, there is no 6dp-vs-displayed gap to preserve and **no `raw_row`** is stored.
 
-### 2.5 Brand matching inside a mixed-brand file — per-row brand (follows the prototype)
+### 2.5 Brand resolution — always from the upload form, never from the file (DECIDED 2026-11-02)
 
-**Mixed-brand files do need per-row brand, and the prototype already does this.** Resolution order per row (prototype `doImport`):
+Brand is **never** read from the file's contents (the prototype's "brand from a file column" path is **removed**). It comes from the upload form and resolves per row:
 
-1. **Multi-brand upload** → brand is read from the file's **brand column** (`brandFromFile`), per row. If a row's brand cell is blank, fall back to rule 2/3.
-2. **EAN already in the DB** → use that product's existing brand.
-3. **EAN is new but a brand is given** (the upload's single brand, or the row's brand column) → create the product under that brand.
-4. **EAN is new and no brand anywhere** → create the product with `status = needs_review`, `brand_id = NULL`, and list it under **"new products — needs your input"**. The offer is still recorded (you don't lose the price), but it's excluded from brand rankings until you assign a brand.
+- **Single-brand upload** → the brand the owner picks applies to **all** rows. If a row's EAN **already exists under a DIFFERENT brand**, that row goes to the **review list** ("EAN already under brand X — confirm") and the product's brand is **never overwritten**. New EANs are created under the picked brand.
+- **Multi-brand upload** (one tab, several brands mixed) → each row's brand is taken from the **existing product with that EAN**. An **unknown EAN** goes to the review list as **"new product — assign a brand"**: the price is kept but **excluded from brand comparisons** until you assign a brand. *(This multi-brand default is to be confirmed with the owner later.)*
+- **Tab-per-brand workbooks are not supported** (§2.3) and not needed; multi-tab workbooks still merge into one batch.
 
-New brand names (not yet in the DB) surface a **brand-approval step** (brand · EANs · descriptions · prices) before the brand is created — exactly as the prototype does.
-
-**Proposal for how per-row brand is stored (not decided — raised per your instruction):** brand lives on `products.brand_id` (one brand per EAN, which is correct — an EAN is one product). For a multi-brand upload, `offer_batches.brand` is set to `'(multi-brand)'` and each row's brand flows to its product. That is enough to rank and filter by brand without storing brand on every offer row. *Open sub-question:* if you ever want to see, for one EAN, that different suppliers labelled it under different brand spellings, we would also tag brand per offer — more storage, rarely needed. **Proposed:** keep brand on the product only; revisit if the per-offer case ever comes up. **Not decided.**
+Brand lives on `products.brand_id` (one brand per EAN — an EAN is one product); a multi-brand upload sets `offer_batches.brand = '(multi-brand)'`. Because brand never comes from file cell content, there is no file-driven brand-approval step.
 
 ### 2.6 Validation & the review list (uncertain matches)
 
@@ -226,6 +227,8 @@ Even with Excel (no OCR), typos happen. A row goes to review, never to silent im
 - No parseable price in any price column.
 - New EAN with no brand (goes to the "needs brand" sub-list).
 - **A per-box row with no pieces-per-box to divide by** (can't compute a per-piece price).
+- **Single-brand upload, EAN already under a different brand** — flagged "EAN already under brand X — confirm"; the product's brand is never overwritten (§2.5).
+- **Multi-brand upload, unknown EAN** — flagged "new product — assign a brand"; the price is kept but excluded from brand comparisons until assigned (§2.5).
 - A near-duplicate description maps to a *different* EAN than a very similar existing product — flagged as "possible EAN typo, confirm".
 
 Each review item carries the **reason** and the mapped row fields (never unmapped cells — §2.8), so you're correcting "EAN checksum failed" or "no price found", not staring at a raw cell.
@@ -318,12 +321,13 @@ Your volume is ~2,000 lines/day ≈ ~730k rows/year. I benchmarked at **5,000,00
 
 You don't need to re-scan 5M rows to know today's cheapest per product. Maintain a small `current_best` row per product, updated on each import for only the touched products. Then the global "cheapest everywhere", "best per brand", and the §9 sourcing feature read from `current_best` (250k rows, indexed) and return in **milliseconds**. The append-only `offers` table remains the full history behind it. **`current_best` is the only maintained cache** (rebuildable from `offers` at any time); EUR and per-piece figures everywhere else are **computed on read**, not stored (O5 §12).
 
-**The freshness rule that decides which offers are "live" is now DECIDED (O2, 2026-11-02) — no age-based expiry, no age warnings:**
+**The replacement rule that decides which offers are "live" is DECIDED (O2, 2026-11-02) — no age-based expiry, no age warnings. Replacement is per supplier + per brand + per offer type:**
 
-- **Per supplier, per kind, the most recent batch counts.** A new **price list** from a supplier **replaces** that supplier's previous price list; a new **stock offer** replaces that supplier's previous stock offer.
-- **Stock offers count until you end them.** A stock offer stays live until you use the **"End offer"** action (§8), which sets `ended_at`; from then it stops counting. Price lists are not ended manually (they are only replaced by a newer list).
+- **A new price list replaces that supplier's previous price list for the SAME brand only;** a new **stock offer** replaces that supplier's previous stock offer for the **same brand** only. **Different brands never replace each other** (a Clinique list never touches the same supplier's Clarins list; a new Clarins price list never touches that supplier's Clarins *stock* offer).
+- **Multi-brand uploads** replace, **for each brand present in the file**, that supplier's previous offer of the same type **for that brand**. *(This multi-brand default is to be confirmed with the owner later.)*
+- **Stock offers count until you end them.** A stock offer stays live until the **"End offer"** action (§8) sets `ended_at`; from then it stops counting. Price lists are only replaced by a newer list of the same brand, never ended manually.
 
-`current_best` is rebuilt from `offers` by taking, for each product, the cheapest per-piece EUR among the **live** batches under that rule. No schema field is needed for age; the rule is fixed logic, not a setting.
+`current_best` is rebuilt from `offers` by taking, for each product, the cheapest per-piece EUR among the **live** offers — an offer is live when its batch is the most recent (by offer date) for that **(supplier, brand, offer type)** and, for stock offers, `ended_at` is NULL. No schema field is needed for age, and there is **no "either rule as a setting" placeholder** — this single rule is implemented directly.
 
 **Conclusion:** SQLite handles many millions of rows here with ms-level interactivity, server-side on your domain host (same box as the CRM), as a single file. (WAL mode on; single user, so no write-contention concerns.)
 
@@ -391,7 +395,7 @@ Net: a **separate program** (separate code, separate data, no CRM data link), **
 
 The goal is to lock the data model and the importer against real-world mess. **This runs during Phase 2 of the build** (server-side ingestion, the first build phase), **before** the review screens and `current_best` depend on its output.
 
-**Synthetic fixtures only (data minimisation — §2.8 and the git rule).** No real supplier or customer file is committed or used in the automated tests. The committed fixtures are **synthetic files that reproduce the shapes seen in the real files**: multi-tab (all sheets merged, §2.3), mixed-brand (a brand column, §2.5), a per-box row needing division, multiple price columns, non-EUR currencies (GBP/USD/SGD), the header-name variety (`OFFER` / `PRICE (USD_` / `USD` / `Price Euros`), and the **data-minimisation case** (a contact block above the header, a sales-rep column, and a person's name in the filename — asserting none of it is stored). **Optional local acceptance:** you may run the importer against your real files on your own machine; those files are never committed.
+**Synthetic fixtures only (data minimisation — §2.8 and the git rule).** No real supplier or customer file is committed or used in the automated tests. The committed fixtures are **synthetic files that reproduce the shapes seen in the real files**: multi-tab (all sheets merged, §2.3), mixed-brand (brands resolved from existing EANs, §2.5), a per-box row needing division, multiple price columns, non-EUR currencies (GBP/USD/SGD), the header-name variety (`OFFER` / `PRICE (USD_` / `USD` / `Price Euros`), and the **data-minimisation case** (a contact block above the header, a sales-rep column, and a person's name in the filename — asserting none of it is stored). **Optional local acceptance:** you may run the importer against your real files on your own machine; those files are never committed.
 
 1. **Use ~10 synthetic fixtures** spanning the range above, plus a legacy `.xls` shape and the data-minimisation case.
 2. **Hand-label** a ground-truth extraction for a sample of rows per fixture (correct EAN / description / per-piece price). This is what correctness is measured against.
@@ -401,12 +405,19 @@ The goal is to lock the data model and the importer against real-world mess. **T
    - locale / multi-price handling (did "lowest price" pick correctly?);
    - **per-box handling** (per-box rows divided by pieces/box, then rounded once, to the right 2dp per-piece price?);
    - **rounding** (does `€24.99/12 = 2.0825 → 2.08`? do format-less cells still round to 2dp? do halves round up?);
-   - brand resolution (existing matched, new created, no-brand flagged, multi-brand from the brand column);
+   - brand resolution (single-brand applied from the form; EAN-under-another-brand → review; multi-brand resolved by existing EAN; unknown EAN → review);
    - EAN checksum catches;
    - **data minimisation** (contact block / sales-rep column / person-in-filename → none stored anywhere, incl. `source_file`).
 5. **Decide from the measurements:** which suppliers need a stored column-mapping template.
 6. **Load test** with synthetic data at projected volume (already done — §3 — re-run with real column shapes once the schema is final).
 7. **Only then** build the full app, suppliers' templates first.
+
+**Required scenario tests (Phase 2, synthetic fixtures):**
+- a **Clinique** list does **not** replace the same supplier's **Clarins** list (different brands never replace);
+- a **new Clarins price list replaces the old Clarins price list**, but **not** that supplier's **Clarins stock offer** (same brand, different type);
+- a **multi-brand upload** matches known EANs to their existing brands and sends an **unknown EAN to review**;
+- a **single-brand upload with an EAN already under another brand** goes to **review** (no overwrite);
+- a **per-box price is divided then rounded once** (`24.99 / 12 → 2.08`).
 
 Acceptance before build: review queue is small (target single-digit % of rows) and no silently-wrong prices got through.
 
@@ -420,7 +431,7 @@ Acceptance before build: review queue is small (target single-digit % of rows) a
 - **Bestsellers** — flagged by ticking a product or entering an EAN (≈10–15 per brand); highlighted, with a dedicated ranking view.
 - **Currency toggle** (EUR default), with the original currency always shown alongside (§4.2). *(No per-piece/as-quoted toggle — only the per-piece price is stored.)*
 - **"End offer" action** on a stock offer — marks it ended (`ended_at`) so it stops counting as live (§3.3 / O2). Price lists are replaced by uploading a newer one, not ended manually.
-- **MOQ is shown** on each offer/column, **display-only** — it never changes the ranking (O3).
+- **MOQ is shown** on each offer/column as **free text**, **display-only** — never parsed, never changes the ranking (O3). **Lead time** and **notes** (also free text) show here too, with the "business info only — no personal details" hint.
 - **Two-offer %-diff tool:** pick two offers → side by side with a % difference column.
 - Drill-down: click any product → its full price history across all suppliers/dates, cheapest first.
 
@@ -477,13 +488,20 @@ Upload a customer file of **EAN + target price**; the tool tells you **which sup
 ### End-user decisions, 2026-11-02 (close O1–O4, O6, O7)
 
 17. **No CRM link (O1 closed).** The price DB is a comparison tool only; it exchanges no data with the CRM. The owner uploads the winning Excel into the CRM's **Purchases tab** manually, outside this system. Removed: the CRM link options (a/b/c), the "Create CRM offer" hand-off, the CRM lookup link, the §9 one-click step, and the CRM-link build phase. The price DB still shares the server, Cloudflare login and backups with the CRM. → §5, §9, §10, build plan.
-18. **Minimal stored data.** Per offer line: **EAN, product description, per-piece price**. Per upload (asked on the form): **supplier company, brand, T1/T2, currency, offer date, offer type (price list | stock offer), MOQ (integer)**. Nothing else — no contact details, no available stock, no size, no raw rows, no original files. → §1.1, §2.8.
+18. **Minimal stored data.** Per offer line: **EAN, product description, per-piece price**. Per upload (asked on the form): **supplier company, brand, T1/T2, currency, offer date, offer type (price list | stock offer), MOQ, lead time, notes** (the last three free text — items 26–27). Nothing else — no contact details, no available stock, no size, no raw rows, no original files. → §1.1, §2.8.
 19. **Per-piece prices (O-pricing).** Per-box files are divided by pieces-per-box **during import**, then rounded. Pieces-per-box is **used at import only, not stored**. Rounding is **after dividing, never round-then-divide**. → §1.2, §2.4.
 20. **Rounding (O6 closed).** Round **all** prices to **2 decimals** — per-piece prices and format-less cells included. **Round-half-up**, ties accepted; this matches Excel's display rounding (half-away-from-zero — verified 2026-11-02). Store the rounded value; the 6dp storage scale stays. FX conversion on read, displayed at 2dp. **Replaces the earlier "importer must not round" rule** and removes `raw_row` / the `.w`/`.z` capture. → §2.4, §1.1.
 21. **Freshness (O2 closed).** No age-based expiry, no age warnings. Per supplier: a new **price list** replaces the previous price list; a new **stock offer** replaces the previous stock offer. Stock offers count until the owner **ends** them (an **"End offer"** action; `ended_at`). → §3.3, §8, §1.1.
-22. **MOQ (O3 closed).** An **integer** typed by the owner on the upload form, for **both** offer types; **displayed only, never affects ranking**. Stored on the batch. → §1.1, §8. *(FLAG: the prototype's MOQ field is free text, e.g. "€25,000 or 6240 pcs"; this decision makes it an integer.)*
+22. **MOQ (O3).** Entered on the upload form, for **both** offer types; **display-only, never affects ranking**. **Type: free text** (e.g. "6240 pcs", "€25,000") — updated 2026-11-02 (see item 26); stored on the batch. → §1.1, §8.
 23. **FX default view (O4 closed).** Default = **today's rate**; the **original currency is always shown alongside**. The manual rate override still wins when set. → §4.2.
 24. **Originals (O7 closed).** **Don't keep uploaded files** — extract and discard. Removed: the uploads folder, the retention setting, and the "re-run history from originals" promise. **Duplicate detection by checksum stays** (a hash is not data). → §2.7, §2.8, §6.
+
+### End-user answers on the four open points, 2026-11-02
+
+25. **Replacement scope (O2 refined).** Replacement is **per supplier + per brand + per offer type**: a new price list replaces that supplier's previous price list for the **same brand** only; a new stock offer replaces the previous stock offer for the **same brand** only; **different brands never replace each other**. The "either rule as a setting" placeholder is **removed** — this rule is implemented directly. **Default (confirm with owner later):** a multi-brand upload replaces, for each brand present in the file, that supplier's previous offer of the same type for that brand. → §3.3, §1.1.
+26. **MOQ is free text (O3).** Supersedes the integer form (item 22): MOQ is **free text**, entered at upload, **display-only**, never parsed or used in ranking. Schema changed INTEGER → TEXT. → §1.1, §8.
+27. **Lead time and notes: keep.** Both are **free-text fields on the upload (batch)**, with the UI hint **"business info only — no personal details"**. → §1.1, §2.2, §8.
+28. **Brand always from the form, never from the file.** The prototype's "brand from a file column" path is **removed**. **Single-brand** upload: the picked brand applies to all rows; an EAN already under a **different** brand goes to **review** (no overwrite). **Multi-brand** upload (one tab): each row's brand comes from the **existing product by EAN**; unknown EANs go to review ("new product — assign a brand"), price kept but excluded from brand comparisons until assigned (**default, confirm later**). **Tab-per-brand workbooks are not supported**; multi-tab workbooks still merge into one batch. → §2.3, §2.5, §2.6.
 
 ---
 
@@ -494,8 +512,8 @@ All of O1–O7 are now **decided**. The schema reserved for every outcome, so ea
 | # | Decision | Status (date) | Resolution |
 |---|---|---|---|
 | O1 | CRM link direction | **DECIDED 2026-11-02** | **No link.** Comparison tool only; manual handoff via the CRM Purchases tab (§5). All link options and the one-click step removed. |
-| O2 | Offer freshness rule | **DECIDED 2026-11-02** | **No age expiry / no age warnings.** Per supplier: newest price list replaces the previous one; newest stock offer replaces the previous one; stock offers count until **ended** (`ended_at`, "End offer" action). `current_best` rebuilt from this live set (§3.3). |
-| O3 | Quantities (available qty / MOQ) | **DECIDED 2026-11-02** | **available_qty removed.** **MOQ** kept as an **integer on the batch**, both kinds, **display-only, never ranks** (§8). |
+| O2 | Offer freshness / replacement rule | **DECIDED 2026-11-02** | **No age expiry.** Replacement per **(supplier, brand, offer type)**: newest price list replaces the previous price list of the same brand; newest stock offer replaces the previous stock offer of the same brand; different brands never replace. Stock offers count until **ended** (`ended_at`). Multi-brand uploads replace per brand present (default, confirm later). No setting — implemented directly (§3.3). |
+| O3 | Quantities (available qty / MOQ) | **DECIDED 2026-11-02** | **available_qty removed.** **MOQ** is **free text** on the batch (updated 2026-11-02 from integer), both kinds, **display-only, never parsed or ranked** (§8). Lead time + notes kept as free-text batch fields (item 27). |
 | O4 | FX default view | **DECIDED 2026-11-02** | **Today's rate** by default, **original currency always shown alongside**; manual override wins (§4.2). Both rates still stored. |
 | O5 | Money & rate representation (developer) | **DECIDED 2026-10-31 / 11-01** | `price_original` = integer minor units at **6 decimals (×1,000,000)**; FX rates as **TEXT**, math in Python `Decimal`; derived EUR computed on read. The stored price is now a **2dp** value (O6) at that 6dp scale. See below. |
 | O6 | Displayed vs stored price | **DECIDED 2026-11-02** | **Round everything to 2dp (half-up).** No displayed-vs-stored gap to keep; `raw_row` and `.w`/`.z` capture removed (§2.4). |

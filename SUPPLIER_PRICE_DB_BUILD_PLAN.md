@@ -2,7 +2,7 @@
 
 *Companion to [SUPPLIER_PRICE_DB_DESIGN.md](SUPPLIER_PRICE_DB_DESIGN.md). That file is the "what and why";
 this is the "how we build it, safely, without ever losing data." **End-user decisions applied 2026-11-02**
-(no CRM link, minimal stored data, per-piece 2dp rounding, freshness by replace/end, MOQ integer, today's-rate
+(no CRM link, minimal stored data, per-piece 2dp rounding, replacement per supplier+brand+type, MOQ free text, today's-rate
 FX default, originals not kept).*
 
 ---
@@ -106,8 +106,12 @@ on your files; all sheets merged into one batch — design §2.3). **Data minimi
 reads **only rows below the detected header and only the mapped columns**, computes the **per-piece price**, and
 POSTs **only** `EAN + description + per-piece price` per line plus the per-upload metadata — unmapped columns and
 any contact block never leave the browser. **There is no `raw_row`.** Per upload the form captures **supplier
-company, brand, territory T1/T2, currency, offer date, offer type (price list | stock offer), and MOQ (integer)**
-(design §2.2). `offer_batches.source_file` is a **neutral reference** (`supplier + date + sha256-prefix`), never
+company, brand, territory T1/T2, currency, offer date, offer type (price list | stock offer), and MOQ, lead time
+and notes (all free text, display-only)** (design §2.2). **Brand always comes from the form, never from the file**
+(design §2.5): a single-brand upload applies the picked brand to every row, but an EAN already under a *different*
+brand goes to **review** (no overwrite); a multi-brand upload resolves each row's brand from the **existing product
+by EAN**, and an unknown EAN goes to review ("new product — assign a brand"). `offer_batches.source_file` is a
+**neutral reference** (`supplier + date + sha256-prefix`), never
 the filename; the **original file is discarded** (O7) — only its SHA-256 is kept for the duplicate warning. Logs
 record counts/reasons only.
 
@@ -120,12 +124,16 @@ per-supplier column mappings**, never keyword guessing.
 
 This is where the design's **importer test (design §7)** runs, on **SYNTHETIC files only** (real supplier files
 are never committed — §2.8). The set covers the header-naming variety (`OFFER`, `PRICE (USD_`, `USD`,
-`Price Euros`), multi-brand (brand column), a per-box row, non-EUR currencies, and the **data-minimisation case**
+`Price Euros`), multi-brand (brands resolved from existing EANs), a per-box row, non-EUR currencies, the
+**replacement rule** (per supplier + brand + type — design §7's five scenario tests), and the **data-minimisation case**
 (contact block above the header + sales-rep column + person's name in the filename → assert **none** of it
 appears anywhere in the DB, incl. `source_file`).
 *Done when:* synthetic files land correct offers (incl. an `OFFER`-headed file); `€24.99/12` stores `2.08`; a
 format-less cell still rounds to 2dp; a per-box row with no pieces-per-box goes to review; the contact-block test
-passes (zero personal data stored); and no original file is written to disk.
+passes (zero personal data stored); no original file is written to disk; and the **five replacement/brand scenario
+tests pass** (Clinique≠Clarins; new Clarins list replaces old Clarins list but not the Clarins stock offer;
+multi-brand matches known EANs and sends an unknown EAN to review; single-brand upload with an EAN under another
+brand → review).
 
 **Phase 3 — Port the prototype screens onto the backend.**
 Switch the prototype's screens from browser `localStorage` to the `:8001` API — same look, server-side data.
@@ -213,9 +221,13 @@ EUR/per-piece **computed on read** (design §12 O5); **data minimisation — no 
   brand, T1/T2, currency, offer date, offer type, MOQ. No size, no stock qty, no raw rows, no originals.
 - **Per-piece prices**: per-box divided by pieces/box at import (not stored), then rounded.
 - **Rounding** (O6): all prices to **2dp, half-up** (matches Excel's half-away-from-zero). No `raw_row`.
-- **Freshness** (O2): no age expiry; newest price list / stock offer per supplier replaces the previous; stock
-  offers end via an **"End offer"** action.
-- **MOQ** (O3): **integer**, both kinds, **display-only**.
+- **Freshness / replacement** (O2): no age expiry; replacement per **(supplier, brand, offer type)** — a newer
+  price list / stock offer replaces the previous of the **same brand** only; different brands never replace;
+  stock offers end via an **"End offer"** action. Multi-brand uploads replace per brand present (default, confirm later).
+- **MOQ** (O3): **free text**, both kinds, **display-only, never parsed/ranked**.
+- **Lead time & notes:** kept as **free-text** batch fields ("business info only — no personal details").
+- **Brand:** always from the upload form, **never from the file**; single-brand conflict (EAN under another brand)
+  → review; multi-brand resolves by existing EAN, unknown EAN → review.
 - **FX default** (O4): **today's rate**, original currency always shown; manual override wins.
 - **Originals** (O7): **not kept** — parse and discard; checksum-only dedupe.
 
