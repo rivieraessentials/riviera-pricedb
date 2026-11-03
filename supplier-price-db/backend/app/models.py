@@ -1,5 +1,6 @@
 """API request/response shapes. Prices cross the wire as STRINGS, never floats, so
-exact decimal values are preserved end to end (design O5 §12)."""
+exact decimal values are preserved end to end (design O5 §12). Stored prices are
+per-piece and rounded to 2dp at import (O6 §2.4)."""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -22,10 +23,14 @@ class BatchCreate(BaseModel):
     currency: str
     received_date: str | None = None
     territory: str | None = None
-    kind: str | None = None
-    source_file: str | None = None
+    kind: str | None = None                # 'price_list' | 'stock_offer' (structured)
+    brand: str | None = None               # single brand label, or '(multi-brand)' (§2.5)
+    moq: str | None = None                 # FREE TEXT, display-only (O3)
+    lead_time: str | None = None           # free text; "business info only"
+    notes: str | None = None               # free text; "business info only"
+    source_file: str | None = None         # neutral reference only (§2.8), never a filename
     source_sha256: str | None = None
-    fx_rate_eur: str | None = None     # TEXT, exactly as published (1 EUR = rate * currency)
+    fx_rate_eur: str | None = None         # TEXT, exactly as published (1 EUR = rate * currency)
     fx_source: str | None = None
     fx_locked: int = 0
     label: str | None = None
@@ -39,20 +44,18 @@ class BatchOut(BaseModel):
 
 class OfferIn(BaseModel):
     ean: str
-    quoted_price: str = Field(..., description="price as quoted, exact decimal string, e.g. '3.9325'")
-    currency: str | None = None        # defaults to the batch currency
-    pieces_per_box: int | None = None
-    price_basis: str = "per_piece"
+    quoted_price: str | None = Field(None, description="price as quoted, exact decimal string")
+    prices: list[str] | None = None          # several price columns; the lowest positive is used (§2.4)
     description: str | None = None
-    size: str | None = None
-    available_qty: int | None = None
-    moq: int | None = None
-    valid_until: str | None = None
-    raw_row: dict | None = None
+    # per-box rows only — used to divide at import, NOT stored (§1.2):
+    pieces_per_box: int | None = None
+    price_basis: str = "per_piece"           # 'per_piece' | 'per_box'
 
 
 class OffersCreate(BaseModel):
     batch_id: int
+    brand_mode: str = "single"               # 'single' (brand from the form) | 'multi' (by existing EAN)
+    brand: str | None = None                 # the picked brand name for a single-brand upload
     offers: list[OfferIn]
 
 
@@ -64,7 +67,13 @@ class ReviewItem(BaseModel):
 class OffersCreated(BaseModel):
     offer_ids: list[int]
     products_touched: list[int]
-    review: list[ReviewItem] = []    # rows that could not be safely imported (e.g. >6 decimals)
+    review: list[ReviewItem] = []    # rows that need a human decision (§2.6)
+
+
+class EndOfferOut(BaseModel):
+    batch_id: int
+    ended_at: str
+    products_rebuilt: int
 
 
 class OfferHistoryItem(BaseModel):
@@ -72,13 +81,13 @@ class OfferHistoryItem(BaseModel):
     batch_id: int
     supplier_id: int
     currency: str
-    price_basis: str
-    pieces_per_box: int | None = None
-    price_original: str        # exact, as quoted
+    kind: str | None = None
+    price_original: str        # the stored per-piece 2dp price
     price_eur: str             # computed on read
     unit_price_eur: str        # per single piece, computed on read
     fx_rate_eur: str | None = None
     received_date: str | None = None
+    ended_at: str | None = None
     created_at: str
 
 

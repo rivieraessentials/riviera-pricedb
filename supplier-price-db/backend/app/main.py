@@ -14,13 +14,9 @@ from . import db, importer, money, repo
 from .auth import Identity, require_identity
 from .config import Config, load_config
 from .models import (
-    BatchCreate, BatchOut, CurrentBestOut, OffersCreate, OffersCreated,
+    BatchCreate, BatchOut, CurrentBestOut, EndOfferOut, OffersCreate, OffersCreated,
     OfferHistoryItem, ProductOffersOut, ReviewItem, SupplierCreate, SupplierOut,
 )
-
-
-class ConfigError(RuntimeError):
-    """Startup refused because configuration is unsafe for the current environment."""
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -32,21 +28,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         conn = db.connect(cfg.db_path)
         try:
             db.migrate(conn)          # bring the schema up to date on startup
-            # Production guard: refuse to serve while the freshness rule is still the
-            # placeholder, so comparisons are never silently based on an undecided rule.
-            if cfg.is_production:
-                rule = repo.get_setting(conn, "freshness_rule", "all")
-                if rule == "all":
-                    raise ConfigError(
-                        "refusing to start in production: freshness_rule is still the "
-                        "placeholder 'all'. Decide O2 (offer freshness rule) and set "
-                        "freshness_rule in settings before serving production traffic."
-                    )
         finally:
             conn.close()
         yield
 
-    app = FastAPI(title="Riviera Supplier Price DB", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Riviera Supplier Price DB", version="0.2.0", lifespan=lifespan)
     app.state.config = cfg
 
     @contextmanager
@@ -81,7 +67,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             dup = repo.find_batch_by_sha(conn, body.source_sha256) if body.source_sha256 else None
             bid = repo.create_batch(
                 conn, body.supplier_id, body.currency, received_date=body.received_date,
-                territory=body.territory, kind=body.kind, source_file=body.source_file,
+                territory=body.territory, kind=body.kind, brand=body.brand, moq=body.moq,
+                lead_time=body.lead_time, notes=body.notes, source_file=body.source_file,
                 source_sha256=body.source_sha256, fx_rate_eur=body.fx_rate_eur,
                 fx_source=body.fx_source, fx_locked=body.fx_locked, label=body.label,
             )
@@ -91,7 +78,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                         f"{dup['batch_id']} on {dup['received_date']}")
             return BatchOut(batch_id=bid)
 
-    # ---- offers (append-only; the import path routes bad rows to review) ----
+    # ---- offers (append-only; the import path routes uncertain rows to review) ----
     @app.post("/offers", response_model=OffersCreated)
     def create_offers(body: OffersCreate, who: Identity = Depends(require_identity)):
         with get_conn() as conn:
@@ -99,12 +86,33 @@ def create_app(config: Config | None = None) -> FastAPI:
                                  (body.batch_id,)).fetchone()
             if batch is None:
                 raise HTTPException(404, detail=f"batch {body.batch_id} not found")
+            brand_id = None
+            if body.brand_mode == "single" and body.brand:
+                brand_id = repo.get_or_create_brand(conn, body.brand)
             rows = [item.model_dump() for item in body.offers]
-            res = importer.import_rows(conn, body.batch_id, rows)
+            res = importer.import_rows(conn, body.batch_id, rows,
+                                       brand_mode=body.brand_mode, brand_id=brand_id)
             return OffersCreated(
                 offer_ids=res.offer_ids, products_touched=res.products_touched,
                 review=[ReviewItem(**r) for r in res.review],
             )
+
+    # ---- end a stock offer (§8): stops it counting as live, never a price edit ----
+    @app.post("/batches/{batch_id}/end-offer", response_model=EndOfferOut)
+    def end_offer(batch_id: int, ended_at: str, who: Identity = Depends(require_identity)):
+        with get_conn() as conn:
+            batch = conn.execute("SELECT * FROM offer_batches WHERE batch_id = ?",
+                                 (batch_id,)).fetchone()
+            if batch is None:
+                raise HTTPException(404, detail=f"batch {batch_id} not found")
+            try:
+                repo.end_offer(conn, batch_id, ended_at)
+            except ValueError as exc:
+                raise HTTPException(400, detail=str(exc))
+            touched = [int(r[0]) for r in conn.execute(
+                "SELECT DISTINCT product_id FROM offers WHERE batch_id = ?", (batch_id,))]
+            n = repo.rebuild_current_best(conn, touched) if touched else 0
+            return EndOfferOut(batch_id=batch_id, ended_at=ended_at, products_rebuilt=n)
 
     # ---- read a product's offer history ----
     @app.get("/products/{ean}/offers", response_model=ProductOffersOut)
@@ -117,10 +125,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             items = [
                 OfferHistoryItem(
                     offer_id=v.offer_id, batch_id=v.batch_id, supplier_id=v.supplier_id,
-                    currency=v.currency, price_basis=v.price_basis, pieces_per_box=v.pieces_per_box,
+                    currency=v.currency, kind=v.kind,
                     price_original=str(v.price_original), price_eur=str(v.price_eur),
                     unit_price_eur=str(v.unit_price_eur), fx_rate_eur=v.fx_rate_eur,
-                    received_date=v.received_date, created_at=v.created_at,
+                    received_date=v.received_date, ended_at=v.ended_at, created_at=v.created_at,
                 )
                 for v in history
             ]

@@ -1,5 +1,5 @@
-"""The six required Phase-1 correctness tests, exercised against the pure core
-(no web layer). Prices compared as Decimal values (exact), never as float."""
+"""Core correctness against the pure storage layer (no web layer). Prices compared as
+Decimal values (exact), never as float."""
 from decimal import Decimal
 
 import pytest
@@ -20,25 +20,19 @@ def test_duplicate_ean_rejected_and_leading_zero_preserved(conn):
         repo.create_product(conn, ean)
 
 
-# 2) a 4- and a 6-decimal price survive storage and retrieval unchanged
-def test_4_and_6_decimal_prices_survive_unchanged(conn):
+# 2) every stored price is a per-piece value rounded to 2dp, round-half-up (O6 §2.4)
+def test_prices_rounded_to_2dp_on_import(conn):
     sid = repo.create_supplier(conn, "Supplier")
     bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1")
     pid = repo.create_product(conn, "4000000000004")
 
-    quotes = ["3.9325", "1.234567", "8.185"]    # 4dp (real it's-a-10), 6dp (scale edge), 3dp (design §2.4)
-    for q in quotes:
-        repo.add_quoted_offer(conn, bid, pid, q, "EUR")
+    cases = {"3.9325": "3.93", "8.185": "8.19", "1.234567": "1.23", "7.49": "7.49"}
+    for quote in cases:
+        repo.add_quoted_offer(conn, bid, pid, quote, "EUR")
 
-    stored = {str(v.price_original): v for v in repo.product_offer_history(conn, pid)}
-    for q in quotes:
-        # retrieved value equals the quote exactly, and the minor-unit round-trip is lossless
-        assert any(Decimal(k) == Decimal(q) for k in stored), f"{q} missing"
-        assert money.from_minor(money.to_minor(q)) == Decimal(q)
-
-    # and the no-round rule: a 7-decimal price is refused, not silently rounded
-    with pytest.raises(money.PriceScaleError):
-        money.to_minor("1.2345678")
+    stored = {str(v.price_original) for v in repo.product_offer_history(conn, pid)}
+    for quote, expected in cases.items():
+        assert any(Decimal(s) == Decimal(expected) for s in stored), f"{quote} -> {expected} missing"
 
 
 # 3) an FX rate stored as text is returned exactly as published
@@ -51,7 +45,6 @@ def test_fx_rate_stored_as_text_is_exact(conn):
 
 # 4) offers are append-only: no code path updates an existing offer's price
 def test_offers_are_append_only(conn):
-    # There is deliberately no update/edit/set-price function on the repo.
     banned = [n for n in dir(repo)
               if any(w in n.lower() for w in ("update", "edit", "set_price")) and "offer" in n.lower()]
     assert banned == [], f"unexpected mutating offer API: {banned}"
@@ -71,22 +64,20 @@ def test_offers_are_append_only(conn):
     assert raw["price_original"] == money.to_minor("10.00")   # untouched
 
 
-# 5) current_best rebuilds identically from scratch
+# 5) current_best rebuilds identically from scratch (cross-currency + per-box, in Decimal)
 def test_current_best_rebuilds_identically(conn):
     gbp_sid = repo.create_supplier(conn, "UK")
     hk_sid = repo.create_supplier(conn, "HongKong")
     eur_sid = repo.create_supplier(conn, "EU")
 
-    # one product, three competing offers in three currencies / bases
     pid = repo.create_product(conn, "5000000000003")
     b_gbp = repo.create_batch(conn, gbp_sid, "GBP", fx_rate_eur="0.84385")   # 1 EUR = 0.84385 GBP
     b_usd = repo.create_batch(conn, hk_sid, "USD", fx_rate_eur="1.1253")     # per box
     b_eur = repo.create_batch(conn, eur_sid, "EUR", fx_rate_eur="1")
-    repo.add_quoted_offer(conn, b_gbp, pid, "6.50", "GBP")                                   # 6.50/0.84385 = ~7.70 EUR/pc
-    repo.add_quoted_offer(conn, b_usd, pid, "96.00", "USD", pieces_per_box=12, price_basis="per_box")  # 8.00 USD/pc /1.1253 = ~7.11 EUR
+    repo.add_quoted_offer(conn, b_gbp, pid, "6.50", "GBP")                                   # 6.50/0.84385 ≈ 7.70 EUR/pc
+    repo.add_quoted_offer(conn, b_usd, pid, "96.00", "USD", pieces_per_box=12, price_basis="per_box")  # 8.00 USD/pc
     repo.add_quoted_offer(conn, b_eur, pid, "7.49", "EUR")                                   # 7.49 EUR/pc
 
-    # a second product with a single offer
     pid2 = repo.create_product(conn, "5000000000010")
     repo.add_quoted_offer(conn, b_eur, pid2, "12.00", "EUR")
 
@@ -98,13 +89,13 @@ def test_current_best_rebuilds_identically(conn):
     assert n1 == n2 == 2
     assert snap1 == snap2                                # byte-for-byte identical result
 
-    # sanity: the USD per-box offer wins product 1 — 8.00 USD/pc ÷ 1.1253 ≈ 7.11 EUR,
-    # cheaper than GBP (~7.70) and EUR (7.49). Per-box + cross-currency, computed in Decimal.
+    # the USD per-box offer wins product 1 — 8.00 USD/pc ÷ 1.1253 ≈ 7.11 EUR, cheaper than
+    # GBP (~7.70) and EUR (7.49). The STORED price is the per-piece 8.00, not the box 96.00.
     best = repo.get_current_best(conn, pid)
     won = repo.product_offer_history(conn, pid)
     winner = next(v for v in won if v.offer_id == best["best_offer_id"])
-    assert winner.currency == "USD" and winner.price_basis == "per_box"
-    assert Decimal(str(winner.price_original)) == Decimal("96.00")
+    assert winner.currency == "USD"
+    assert Decimal(str(winner.price_original)) == Decimal("8.00")
     assert winner.unit_price_eur < Decimal("7.49")
 
 
@@ -116,7 +107,6 @@ def test_duplicate_file_checksum_detected(conn):
 
     dup = repo.find_batch_by_sha(conn, sha)              # same bytes -> flagged
     assert dup is not None and int(dup["batch_id"]) == b1
-
     assert repo.find_batch_by_sha(conn, "b" * 64) is None   # a new file is not flagged
 
 

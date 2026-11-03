@@ -1,9 +1,14 @@
-"""The money path — integers and Decimal only, never float (design §1.1, O5 §12).
+"""The money path — integers and Decimal only, never float (design §1.1, O5/O6 §12).
 
-Prices are stored as INTEGER minor units at a fixed scale of 6 decimals
-(×1,000,000). EUR and per-piece values are COMPUTED ON READ here and are never
-written back as a source of truth (the one cache, current_best.best_unit_price_eur,
-is a rounded integer produced by eur_to_minor()).
+Prices are stored as INTEGER minor units at a fixed scale of 6 decimals (×1,000,000).
+Since O6 (2026-11-02) every stored price is a PER-PIECE value ROUNDED TO 2 DECIMALS
+(round-half-up); the 6dp scale is kept only as headroom so no future scale migration is
+needed. EUR values are COMPUTED ON READ here and are never written back as a source of
+truth (the one cache, current_best.best_unit_price_eur, is a rounded integer).
+
+Rounding note (O6, §2.4): round-half-up is Python's decimal.ROUND_HALF_UP, which rounds
+halves away from zero — identical to Excel's display rounding for all prices (≥ 0). The
+per-box rule is DIVIDE FIRST, then round ONCE (never round-then-divide).
 """
 from __future__ import annotations
 
@@ -11,11 +16,12 @@ from decimal import Decimal, ROUND_HALF_UP, InvalidOperation, localcontext
 
 SCALE = 6                       # decimals of headroom (raw scan 2026-11-01: suppliers quote up to 4)
 MULTIPLIER = Decimal(10) ** SCALE   # 1_000_000
+CENT = Decimal("0.01")          # prices are rounded to 2 decimals (O6 §2.4)
 _PREC = 40                      # generous working precision for intermediate division
 
 
 class PriceScaleError(ValueError):
-    """A quoted price cannot be represented exactly at SCALE, or a float reached the money path."""
+    """A value cannot be represented at SCALE, or a float reached the money path."""
 
 
 def _as_decimal(value) -> Decimal:
@@ -35,11 +41,12 @@ def _as_decimal(value) -> Decimal:
 
 
 def to_minor(value) -> int:
-    """Quoted price (str/Decimal/int) -> integer minor units, EXACTLY.
+    """An EXACT value (str/Decimal/int) -> integer minor units.
 
-    Raises PriceScaleError if the value has more than SCALE fractional digits: the
-    importer must never silently round a quoted price (design §2.4 pt 5). Such a row
-    goes to the review queue instead.
+    Used for values already known to fit the scale (e.g. a 2dp price produced by
+    round_price). Raises PriceScaleError if the value needs more than SCALE decimals —
+    a guard that a non-rounded value never silently slips through. The IMPORT path does
+    not rely on this to round; it rounds explicitly via round_price / import_price_minor.
     """
     d = _as_decimal(value)
     if not d.is_finite():
@@ -48,10 +55,32 @@ def to_minor(value) -> int:
         ctx.prec = _PREC
         scaled = d * MULTIPLIER
         if scaled != scaled.to_integral_value():
-            raise PriceScaleError(
-                f"price {d} needs more than {SCALE} decimals; importer must not round (design §2.4)"
-            )
+            raise PriceScaleError(f"value {d} needs more than {SCALE} decimals")
         return int(scaled)
+
+
+def round_price(value, pieces_per_box: int | None = None) -> Decimal:
+    """The per-piece price of one row, rounded to 2 decimals (O6 §2.4).
+
+    If pieces_per_box is given the box price is DIVIDED FIRST, then rounded ONCE
+    (e.g. 24.99 / 12 = 2.0825 -> 2.08). Round-half-up (ties away from zero).
+    """
+    d = _as_decimal(value)
+    if not d.is_finite():
+        raise PriceScaleError(f"price is not finite: {value!r}")
+    with localcontext() as ctx:
+        ctx.prec = _PREC
+        if pieces_per_box is not None:
+            ppb = int(pieces_per_box)
+            if ppb <= 0:
+                raise PriceScaleError(f"pieces_per_box must be positive: {pieces_per_box!r}")
+            d = d / Decimal(ppb)
+        return d.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def import_price_minor(value, pieces_per_box: int | None = None) -> int:
+    """Import entry point: per-piece 2dp price as integer minor units (§2.4)."""
+    return to_minor(round_price(value, pieces_per_box))
 
 
 def from_minor(minor: int) -> Decimal:
@@ -86,20 +115,10 @@ def price_to_eur(price_minor: int, fx_rate_text: str) -> Decimal:
         return from_minor(price_minor) / rate
 
 
-def unit_price_eur(price_minor: int, fx_rate_text: str, pieces_per_box, price_basis: str) -> Decimal:
-    """Per-single-piece EUR for one offer (the comparison key). Computed on read.
+def unit_price_eur(price_minor: int, fx_rate_text: str) -> Decimal:
+    """Per-single-piece EUR for one offer — the comparison key (computed on read).
 
-    per_box prices are divided by pieces_per_box first (design §1.2); default basis
-    is per_piece when absent.
+    Since O6 the stored price_original is ALREADY a per-piece price (per-box division
+    happened at import, §1.2), so the comparison key is simply the EUR conversion.
     """
-    with localcontext() as ctx:
-        ctx.prec = _PREC
-        per_piece = from_minor(price_minor)
-        if price_basis == "per_box":
-            if not pieces_per_box or int(pieces_per_box) <= 0:
-                raise PriceScaleError("per_box price needs a positive pieces_per_box")
-            per_piece = per_piece / Decimal(int(pieces_per_box))
-        rate = _as_decimal(fx_rate_text)
-        if rate <= 0:
-            raise PriceScaleError(f"fx rate must be positive: {fx_rate_text!r}")
-        return per_piece / rate
+    return price_to_eur(price_minor, fx_rate_text)
