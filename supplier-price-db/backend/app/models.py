@@ -92,6 +92,23 @@ class OfferHistoryItem(BaseModel):
     created_at: str
 
 
+class FxManualRate(BaseModel):
+    rate_date: str                 # ISO date the rate applies to
+    currency: str
+    rate: str                      # TEXT, exactly as entered; 1 EUR = rate * currency
+
+
+class FxRatesOut(BaseModel):
+    rate_date: str
+    rates: dict[str, str] = {}     # {currency: rate_text}
+
+
+class FxRefreshOut(BaseModel):
+    rate_date: str | None = None
+    written: int
+    source: str                    # 'frankfurter' | 'ecb'
+
+
 class CurrentBestOut(BaseModel):
     best_offer_id: int
     best_unit_price_eur: str

@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager, contextmanager
+from datetime import date as _date
+from decimal import Decimal, InvalidOperation
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 
-from . import db, importer, money, offer_types, repo
+from . import db, export, fx, importer, money, offer_types, repo
 from .auth import Identity, require_identity
 from .config import Config, load_config
 from .models import (
-    BatchCreate, BatchOut, CurrentBestOut, EndOfferOut, OffersCreate, OffersCreated,
-    OfferHistoryItem, ProductOffersOut, ReviewItem, SupplierCreate, SupplierOut,
+    BatchCreate, BatchOut, CurrentBestOut, EndOfferOut, FxManualRate, FxRatesOut,
+    FxRefreshOut, OffersCreate, OffersCreated, OfferHistoryItem, ProductOffersOut,
+    ReviewItem, SupplierCreate, SupplierOut,
 )
 
 
@@ -113,6 +116,49 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "SELECT DISTINCT product_id FROM offers WHERE batch_id = ?", (batch_id,))]
             n = repo.rebuild_current_best(conn, touched) if touched else 0
             return EndOfferOut(batch_id=batch_id, ended_at=ended_at, products_rebuilt=n)
+
+    # ---- FX rates: read, manual override, on-demand refresh (daily fetch is a server job) ----
+    @app.get("/fx/rates", response_model=FxRatesOut)
+    def fx_rates(rate_date: str | None = None, who: Identity = Depends(require_identity)):
+        with get_conn() as conn:
+            if rate_date is None:
+                row = conn.execute("SELECT MAX(rate_date) AS d FROM fx_rates").fetchone()
+                rate_date = (row["d"] if row else None) or ""
+            rows = conn.execute("SELECT currency, rate FROM fx_rates WHERE rate_date = ?",
+                                (rate_date,)).fetchall()
+            return FxRatesOut(rate_date=rate_date, rates={r["currency"]: r["rate"] for r in rows})
+
+    @app.post("/fx/rates", response_model=FxRatesOut)
+    def fx_set_manual(body: FxManualRate, who: Identity = Depends(require_identity)):
+        try:
+            if Decimal(body.rate.strip()) <= 0:
+                raise InvalidOperation
+        except (InvalidOperation, ArithmeticError):
+            raise HTTPException(400, detail="rate must be a positive decimal (1 EUR = rate * currency)")
+        with get_conn() as conn:
+            repo.set_fx_rate(conn, body.rate_date, body.currency.upper(), body.rate.strip(), "manual")
+            rows = conn.execute("SELECT currency, rate FROM fx_rates WHERE rate_date = ?",
+                                (body.rate_date,)).fetchall()
+            return FxRatesOut(rate_date=body.rate_date, rates={r["currency"]: r["rate"] for r in rows})
+
+    @app.post("/fx/refresh", response_model=FxRefreshOut)
+    def fx_refresh(who: Identity = Depends(require_identity)):
+        with get_conn() as conn:
+            try:
+                rdate, n, source = fx.update_fx_rates(conn, cfg.fx)
+            except Exception as exc:
+                raise HTTPException(502, detail=f"FX fetch failed: {exc}")
+            return FxRefreshOut(rate_date=rdate, written=n, source=source)
+
+    # ---- offline download bundle (3-2-1 copy, design §6): SQLite snapshot + CSV exports ----
+    @app.get("/export")
+    def export_bundle(who: Identity = Depends(require_identity)):
+        with get_conn() as conn:
+            data = export.build_bundle(conn, cfg.db_path)
+        stamp = _date.today().isoformat()
+        return Response(content=data, media_type="application/zip",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="pricedb-export-{stamp}.zip"'})
 
     # ---- read a product's offer history ----
     @app.get("/products/{ean}/offers", response_model=ProductOffersOut)

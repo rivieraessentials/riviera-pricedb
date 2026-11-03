@@ -19,10 +19,15 @@ app/
   config.py      loads config.toml / PRICEDB_* env; nothing operational is hardcoded
   repo.py        data access; APPEND-ONLY (no offer-price update path); current_best rebuild
   importer.py    the import path: lowest price, per-box divide+round, brand resolution, review
+  offer_types.py the two offer types: stored code (price_list/stock_offer) -> display name
+  fx.py          daily FX fetch (Frankfurter -> ECB fallback), base EUR, no key; `python -m app.fx`
+  export.py      the offline download bundle (SQLite snapshot + offers/current_best CSVs)
   auth.py        Cloudflare Access JWT verify — defence-in-depth, OFF by default in dev
   models.py      API shapes; prices cross the wire as strings (exact, never float)
   main.py        FastAPI app: /healthz + suppliers / batches / offers / end-offer / history
-tests/           pytest — core + money + importer + migrations + API + the 5 scenario tests
+                 + fx (/fx/rates, /fx/refresh) + /export (download bundle)
+tests/           pytest — core + money + importer + migrations + API + scenario + replacement
+                 + fx + export tests
 ```
 
 ## Run
@@ -54,6 +59,17 @@ deterministically (lowest per-piece EUR, ties broken by lowest `offer_id`). An o
 offer type)** and, for stock offers, `ended_at IS NULL` — so a newer price list / stock
 offer replaces the previous one of the same brand+type, and the **"End offer"** action stops
 a stock offer counting. No age-based expiry; no `freshness_rule` setting (`§3.3`).
+
+## Exchange rates & offline export (Phase 2 / Step A)
+
+- **Daily FX fetch** (`app.fx`): base EUR, **no API key** — **Frankfurter** primary, **ECB** daily XML
+  fallback. Rates stored as TEXT exactly as published (`1 EUR = rate * currency`; O5 §12). Run it from a
+  systemd timer / cron on the server (design §4.2): `python -m app.fx`. On-demand from the UI via
+  `POST /fx/refresh`; read with `GET /fx/rates[?rate_date=…]`.
+- **Manual override** (`POST /fx/rates` → `source='manual'`): the weekend/holiday escape hatch, a day-level
+  rate. The per-batch override (`offer_batches.fx_rate_eur` + `fx_locked`) is separate and wins for that batch.
+- **Offline download bundle** (`GET /export`): a ZIP with a consistent **SQLite snapshot** (backup API, WAL-safe)
+  plus plain **`offers.csv`** and **`current_best.csv`** — the 3-2-1 local copy (design §6). Business data only.
 
 ## Identity / Cloudflare Access (OFF by default)
 `config.toml` carries an **email allow-list** (any number of addresses, never hardcoded).

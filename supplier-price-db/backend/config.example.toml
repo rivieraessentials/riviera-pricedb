@@ -31,3 +31,11 @@ enabled = false
 team_name = ""   # e.g. "rivieraessentials"  (NOT the full URL)
 aud_tag = ""     # from Zero Trust > Access > Applications > your app > Application Audience (AUD) Tag
 dev_identity = "dev@localhost"   # identity used when enabled = false (local dev only)
+
+# Daily FX fetch (app.fx) — base EUR, no API key. Run `python -m app.fx` from a systemd
+# timer / cron (design §4.2). Rates: 1 EUR = rate * currency, stored exactly as published.
+[fx]
+symbols = ["GBP", "USD", "SGD", "CAD", "HKD"]
+timeout = 10.0
+frankfurter_url = "https://api.frankfurter.dev/v1/latest"   # primary
+ecb_url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"   # fallback

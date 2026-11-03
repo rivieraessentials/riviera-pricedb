@@ -30,6 +30,15 @@ class AccessConfig:
 
 
 @dataclass
+class FxConfig:
+    # The daily FX fetch (app.fx). No API key. Rates are base EUR (1 EUR = rate * currency).
+    symbols: list[str] = field(default_factory=lambda: ["GBP", "USD", "SGD", "CAD", "HKD"])
+    timeout: float = 10.0
+    frankfurter_url: str = "https://api.frankfurter.dev/v1/latest"
+    ecb_url: str = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+
+
+@dataclass
 class Config:
     host: str = "127.0.0.1"
     port: int = 8001
@@ -37,6 +46,7 @@ class Config:
     db_path: str = str(BACKEND_DIR / "data" / "pricedb.db")
     allowed_emails: list[str] = field(default_factory=list)
     access: AccessConfig = field(default_factory=AccessConfig)
+    fx: FxConfig = field(default_factory=FxConfig)
 
     @property
     def is_production(self) -> bool:
@@ -65,6 +75,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     database = raw.get("database", {})
     identity = raw.get("identity", {})
     access = raw.get("access", {})
+    fx = raw.get("fx", {})
 
     db_path = database.get("path", "data/pricedb.db")
     if not os.path.isabs(db_path):
@@ -81,6 +92,12 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
             team_name=access.get("team_name", ""),
             aud_tag=access.get("aud_tag", ""),
             dev_identity=access.get("dev_identity", "dev@localhost"),
+        ),
+        fx=FxConfig(
+            symbols=list(fx.get("symbols", FxConfig().symbols)),
+            timeout=float(fx.get("timeout", 10.0)),
+            frankfurter_url=fx.get("frankfurter_url", FxConfig().frankfurter_url),
+            ecb_url=fx.get("ecb_url", FxConfig().ecb_url),
         ),
     )
 
