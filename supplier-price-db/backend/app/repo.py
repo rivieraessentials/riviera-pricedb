@@ -367,3 +367,228 @@ def list_review_items(conn: sqlite3.Connection, batch_id: int | None = None) -> 
     return conn.execute(
         "SELECT * FROM review_queue WHERE batch_id = ? ORDER BY review_id", (batch_id,)
     ).fetchall()
+
+
+# ---------------------------------------------------------------- frontend read/write (Step B)
+#
+# The screens below back the MVP UI. They add NO price-mutation path: products gain only a
+# description / brand / bestseller flag, suppliers a name / country, and a whole mis-imported
+# batch can be removed (an explicit owner action, not a price edit — append-only still governs
+# every recorded price). Customer requests store inputs only (§9); results are never stored.
+
+def list_brands(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT brand_id, name FROM brands ORDER BY name COLLATE NOCASE").fetchall()
+
+
+def list_suppliers(conn: sqlite3.Connection) -> list[dict]:
+    """Suppliers with the Suppliers-screen derivations: brands offered + live/total offer count."""
+    out: list[dict] = []
+    for s in conn.execute("SELECT * FROM suppliers ORDER BY name COLLATE NOCASE").fetchall():
+        brands = [r["brand"] for r in conn.execute(
+            "SELECT DISTINCT brand FROM offer_batches WHERE supplier_id = ? AND brand IS NOT NULL "
+            "ORDER BY brand COLLATE NOCASE", (s["supplier_id"],))]
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM offers o JOIN offer_batches b ON b.batch_id = o.batch_id "
+            "WHERE b.supplier_id = ?", (s["supplier_id"],)).fetchone()["n"]
+        out.append({"supplier_id": int(s["supplier_id"]), "name": s["name"],
+                    "country": s["country"], "default_territory": s["default_territory"],
+                    "brands": brands, "offers": int(n)})
+    return out
+
+
+def update_supplier(conn: sqlite3.Connection, supplier_id: int, *,
+                   name: str | None = None, country: str | None = None) -> None:
+    if name is not None:
+        conn.execute("UPDATE suppliers SET name = ? WHERE supplier_id = ?", (name.strip(), supplier_id))
+    if country is not None:
+        conn.execute("UPDATE suppliers SET country = ? WHERE supplier_id = ?",
+                     (country.strip() or None, supplier_id))
+
+
+def update_product(conn: sqlite3.Connection, ean: str, *, description: str | None = None,
+                  brand_id: int | None = None, set_brand: bool = False) -> None:
+    """Edit a product's description and/or brand (size is not stored — dropped 2026-11-02).
+    set_brand=True applies brand_id (which may be None to clear); otherwise brand is untouched."""
+    if description is not None:
+        conn.execute("UPDATE products SET description = ? WHERE ean = ?",
+                     (description.strip() or None, str(ean)))
+    if set_brand:
+        status = "active" if brand_id is not None else "needs_review"
+        conn.execute("UPDATE products SET brand_id = ?, status = ? WHERE ean = ?",
+                     (brand_id, status, str(ean)))
+
+
+def set_bestseller(conn: sqlite3.Connection, ean: str, flag: bool) -> None:
+    conn.execute("UPDATE products SET is_bestseller = ? WHERE ean = ?",
+                 (1 if flag else 0, str(ean)))
+
+
+def list_batches(conn: sqlite3.Connection) -> list[dict]:
+    """Every batch with supplier name and line count — the Import log (newest first)."""
+    rows = conn.execute(
+        "SELECT b.*, s.name AS supplier_name, "
+        "  (SELECT COUNT(*) FROM offers o WHERE o.batch_id = b.batch_id) AS n_offers "
+        "FROM offer_batches b JOIN suppliers s ON s.supplier_id = b.supplier_id "
+        "ORDER BY b.received_date DESC, b.batch_id DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_batch(conn: sqlite3.Connection, batch_id: int) -> list[int]:
+    """Remove a whole mis-imported batch and its offers (prototype 'Delete offer'). Returns the
+    product ids whose current_best must be rebuilt. A hard removal — not a price edit; the
+    append-only rule governs recorded prices, not the undo of an entire wrong upload."""
+    touched = [int(r[0]) for r in conn.execute(
+        "SELECT DISTINCT product_id FROM offers WHERE batch_id = ?", (batch_id,))]
+    conn.execute("BEGIN")
+    try:
+        # clear the derived cache first: its best_offer_id FK points at offers we're deleting.
+        for pid in touched:
+            conn.execute("DELETE FROM current_best WHERE product_id = ?", (pid,))
+        conn.execute("DELETE FROM offers WHERE batch_id = ?", (batch_id,))
+        conn.execute("DELETE FROM review_queue WHERE batch_id = ?", (batch_id,))
+        # a product first seen in this batch keeps its row; just drop the dangling reference.
+        conn.execute("UPDATE products SET first_seen_batch_id = NULL WHERE first_seen_batch_id = ?",
+                     (batch_id,))
+        conn.execute("DELETE FROM offer_batches WHERE batch_id = ?", (batch_id,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    if touched:
+        rebuild_current_best(conn, touched)   # re-derive best from whatever live offers remain
+    return touched
+
+
+def brand_grid(conn: sqlite3.Connection, brand_id: int,
+              territory: str | None = None) -> tuple[list[dict], list[dict]]:
+    """The Offers grid for one brand: LIVE offer columns (the replacement rule, §3.3) and a row
+    per product with that supplier's live per-piece EUR price. 'Best' is the cheapest shown cell.
+    Superseded and ended offers are not columns here (they remain in each product's history)."""
+    prods = conn.execute(
+        "SELECT product_id, ean, description, is_bestseller FROM products "
+        "WHERE brand_id = ? ORDER BY description COLLATE NOCASE", (brand_id,)).fetchall()
+
+    batch_meta: dict[int, dict] = {}
+    rows: list[dict] = []
+    for p in prods:
+        pid = int(p["product_id"])
+        live = set(live_offer_ids(conn, pid))
+        prices: dict[int, str] = {}
+        best: Decimal | None = None
+        best_bid: int | None = None
+        for v in product_offer_history(conn, pid):
+            if v.offer_id not in live:
+                continue
+            if v.unit_price_eur != v.unit_price_eur:      # NaN -> no rate
+                continue
+            bid = v.batch_id
+            if bid not in batch_meta:
+                b = conn.execute(
+                    "SELECT b.*, s.name AS supplier_name FROM offer_batches b "
+                    "JOIN suppliers s ON s.supplier_id = b.supplier_id WHERE b.batch_id = ?",
+                    (bid,)).fetchone()
+                if territory not in (None, "all") and (b["territory"] or "") != territory:
+                    continue                              # filtered-out column: skip this cell too
+                batch_meta[bid] = {
+                    "batch_id": bid, "supplier": b["supplier_name"], "supplier_id": b["supplier_id"],
+                    "received_date": b["received_date"], "kind": b["kind"],
+                    "territory": b["territory"], "ended_at": b["ended_at"]}
+            elif territory not in (None, "all") and batch_meta[bid]["territory"] != territory:
+                continue
+            prices[bid] = str(v.unit_price_eur.quantize(money.CENT))
+            if best is None or v.unit_price_eur < best:
+                best, best_bid = v.unit_price_eur, bid
+        rows.append({"ean": p["ean"], "description": p["description"],
+                     "is_bestseller": bool(p["is_bestseller"]),
+                     "prices": prices,
+                     "best_eur": str(best.quantize(money.CENT)) if best is not None else None,
+                     "best_batch_id": best_bid})
+
+    batches = sorted(batch_meta.values(),
+                     key=lambda b: (b["received_date"] or "", b["batch_id"]), reverse=True)
+    return batches, rows
+
+
+def bestsellers(conn: sqlite3.Connection, brand_id: int | None = None) -> list[dict]:
+    """Flagged products with their three cheapest LIVE suppliers, low→high (Bestsellers screen)."""
+    q = ("SELECT p.product_id, p.ean, p.description, br.name AS brand FROM products p "
+         "LEFT JOIN brands br ON br.brand_id = p.brand_id WHERE p.is_bestseller = 1")
+    args: tuple = ()
+    if brand_id is not None:
+        q += " AND p.brand_id = ?"
+        args = (brand_id,)
+    out: list[dict] = []
+    for p in conn.execute(q + " ORDER BY p.description COLLATE NOCASE", args).fetchall():
+        pid = int(p["product_id"])
+        live = set(live_offer_ids(conn, pid))
+        offers = []
+        for v in product_offer_history(conn, pid):
+            if v.offer_id not in live or v.unit_price_eur != v.unit_price_eur:
+                continue
+            sup = conn.execute("SELECT name FROM suppliers WHERE supplier_id = ?",
+                               (v.supplier_id,)).fetchone()
+            offers.append({"supplier": sup["name"] if sup else None,
+                           "unit_price_eur": v.unit_price_eur})
+        offers.sort(key=lambda o: o["unit_price_eur"])
+        out.append({"ean": p["ean"], "description": p["description"], "brand": p["brand"],
+                    "offers": [{"supplier": o["supplier"],
+                                "unit_price_eur": str(o["unit_price_eur"].quantize(money.CENT))}
+                               for o in offers[:3]]})
+    return out
+
+
+# ---------------------------------------------------------------- customer requests (§9)
+
+def create_request(conn: sqlite3.Connection, *, customer: str | None, brand: str | None,
+                  request_date: str | None, margin: str,
+                  lines: list[dict]) -> int:
+    """Store a request's INPUTS only (EAN, target minor units, currency). No result is stored."""
+    conn.execute("BEGIN")
+    try:
+        cur = conn.execute(
+            "INSERT INTO requests (customer, brand, request_date, margin) VALUES (?, ?, ?, ?)",
+            ((customer or "").strip() or None, (brand or "").strip() or None,
+             request_date, str(margin)))
+        rid = int(cur.lastrowid)
+        for ln in lines:
+            conn.execute(
+                "INSERT INTO request_lines (request_id, ean, target_price, currency) "
+                "VALUES (?, ?, ?, ?)",
+                (rid, str(ln["ean"]), int(ln["target_price"]), (ln.get("currency") or "EUR").upper()))
+        conn.execute("COMMIT")
+        return rid
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def get_request(conn: sqlite3.Connection, request_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM requests WHERE request_id = ?", (request_id,)).fetchone()
+
+
+def request_lines(conn: sqlite3.Connection, request_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM request_lines WHERE request_id = ? ORDER BY line_id", (request_id,)).fetchall()
+
+
+def list_requests(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT r.*, (SELECT COUNT(*) FROM request_lines l WHERE l.request_id = r.request_id) "
+        "AS n_lines FROM requests r ORDER BY r.request_id DESC").fetchall()
+
+
+def delete_request(conn: sqlite3.Connection, request_id: int) -> None:
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM request_lines WHERE request_id = ?", (request_id,))
+        conn.execute("DELETE FROM requests WHERE request_id = ?", (request_id,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def distinct_customers(conn: sqlite3.Connection) -> list[str]:
+    return [r[0] for r in conn.execute(
+        "SELECT DISTINCT customer FROM requests WHERE customer IS NOT NULL "
+        "ORDER BY customer COLLATE NOCASE")]

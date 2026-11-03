@@ -282,21 +282,67 @@ shows the patterns — §7 of the design); **brand-alias management UI**.
 | **A. Backend finish** | FX daily fetch (Frankfurter → ECB fallback) + manual override; export/download bundle | me |
 | **B. Frontend** | port the screens onto the API — wizard, grid/drill-down, review queue, currency toggle, end-offer, bestseller flag, settings, export, **sourcing**, **two-offer comparison**; self-host **SheetJS 0.20.3 + SRI**; sourcing/comparison backend endpoints | me |
 | **C. Real-file acceptance** | run ~10 real supplier files locally (mix of regular/stock, multi-brand, non-EUR); measure review rate, correctness, per-supplier mapping; files stay **outside the repo, never committed** | **owner** provides files; me to analyse/adjust |
-| **D. Server setup** | subdomain DNS; **Cloudflare Access app** (AUD tag) + shared policy; **tunnel** ingress → `:8001`; **systemd** unit; add `/data/pricedb` to restic + **restore drill** | **owner** (Cloudflare/DNS) + a **quiet evening** (shared box — a blip can touch the CRM) |
-| **E. Cutover** | deploy, smoke test (import a real file, best price, currency, end-offer, sourcing, export), hand over | me + owner verify |
+| **D. Server setup** | subdomain DNS; **Cloudflare Access app** (AUD tag) + shared policy; **tunnel** ingress → `:8001`; **systemd** unit (non-root user); add `/data/pricedb` to restic + **restore drill** | **owner** (Cloudflare/DNS) + a **quiet evening** (shared box — a blip can touch the CRM) |
+| **E. Security gate** | independent security review of the finished code **by a separate agent that did not write it**; verify the §7.5 measures on the running server (Access ON, CSP, Origin/validation, non-root + file perms, restic restore); report findings to the owner and **fix before cutover** | separate agent + me to fix; **owner** reviews findings |
+| **F. Cutover** | deploy, smoke test (import a real file, best price, currency, end-offer, sourcing, export), hand over | me + owner verify |
 
 ### 7.4 Honest estimate (working sessions) + uncertainty
 
-- **A** — ~1–2 sessions (**built this turn**: FX fetch + manual override + export bundle).
-- **B** — **4–6 sessions. Most uncertain by scope** — the larger surface now includes sourcing + the comparison
-  tool and the SheetJS self-host/SRI step.
+- **A** — ~1–2 sessions (**built**: FX fetch + manual override + export bundle).
+- **B** — **4–6 sessions. Built this turn** (2026-11-03): all MVP screens on the API, sourcing, two-offer
+  comparison, SheetJS self-host + SRI, and the §7.5 security measures. Real-file test (C) still ahead.
 - **C** — 1–2 sessions, **high uncertainty**: depends on how messy the real files are; can loop back into B.
 - **D** — 1–2 sessions of work, **calendar-gated** by owner/Cloudflare access and the quiet-evening rule; the
   Access-app/tunnel wiring is the main operational unknown (the subdomain runbook de-risks it).
-- **E** — ~1 session.
+- **E (Security gate)** — ~1 session (independent agent review + fixes).
+- **F (Cutover)** — ~1 session.
 
-**Total ≈ 8–13 working sessions** (was ~7–12 before sourcing + comparison moved into the MVP). Biggest risks:
+**Total ≈ 9–14 working sessions** (adds the security gate). Biggest risks:
 **(1)** the frontend breadth + real-file messiness (B/C), **(2)** the Cloudflare Access/tunnel stand-up (D).
+
+### 7.5 Security measures built into Step B (owner, 2026-11-03)
+
+Standard measures, built in from the start — not extra screens or settings. Reported per point:
+
+1. **Production Access gate** — `config.check_production_security()` runs at startup; in `production` the app
+   **refuses to boot** unless Cloudflare Access JWT verification is ON with a team name + AUD tag and a non-empty
+   email allow-list (and a public origin for the Origin check). OFF only in local development. *(test_security)*
+2. **XSS** — the frontend holds **no inline event handlers and no inline `<script>`**; every value from a supplier
+   file or the user is written with `esc()` / text, never raw HTML. Verified in the browser: a description of
+   `<img onerror>…<script>` renders as literal text and does not execute. *(test: XSS payload round-trips verbatim)*
+3. **Server-side validation** (`app/validate.py`) on every endpoint — EAN digits/length (and check digit on import),
+   prices as positive numbers under a sane cap, required fields, **row-count** (≤20k offers, ≤5k request lines) and
+   **16 MB body** limits; clear 4xx on bad input; **parameterised SQL only**. *(test_security, test_frontend_api)*
+4. **CSRF** — state-changing requests must be **JSON** and carry an **Origin** matching the app's own origin
+   (`SecurityMiddleware`); a cross-site form can't do either. *(test_security)*
+5. **No runtime external resources** — the page loads only this origin: `styles.css`, `app.js`, and the
+   **self-hosted SheetJS 0.20.3 with SRI**. A strict **Content-Security-Policy** (`default-src 'self'`,
+   `script-src 'self'`, `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`) is set on every
+   response, plus `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`. *(test_security)*
+6. **Server hardening** (step D, runbook) — run as a **non-root** user; `/data/pricedb` readable only by that user;
+   **systemd** unit with `Restart=on-failure`; access logs carry URLs/status only, **never row contents**; `/data`
+   in **restic** with a **restore drill**. *(documented in the subdomain/ops runbook; applied at server setup)*
+7. **Export bundle** — the Settings screen warns, by the download button, that the bundle is the **full database**
+   and belongs on the **encrypted drive**; the bundle README repeats "business data only".
+8. **Independent security review** — **step E**: a separate agent that did not write the code reviews it, findings
+   go to the owner, fixes land **before cutover**.
+
+### 7.6 Prototype → MVP deviations (Step B), each forced by a decision
+
+- Offer type: prototype's free-text `kind` (3 values) → the two structured types (Regular / Stock).
+- Brand from the upload **form only** (single, or multi matched by EAN); the prototype's brand-column +
+  brand-approval step is gone.
+- **Best price = cheapest *live* offer** (replacement/End-offer rule); the prototype showed every batch and picked
+  the cheapest shown. Superseded/ended offers are not grid columns (they stay in a product's history).
+- **Customer requests** store inputs only and recompute live; the prototype persisted the full result and had a
+  **"→ Create CRM offer"** button — **removed** (O1, no CRM link).
+- **Size** is not stored (dropped 2026-11-02), so the product editor has description + brand only.
+- **Delete offer** is a hard removal of a mis-imported batch (prototype behaviour kept); append-only still governs
+  recorded **prices** — a correction is a new offer, never an edit.
+- Data now lives on the **server**; `localStorage` holds only the grid zoom level. Column reordering is an
+  in-session convenience (not persisted). Supplier **country** added as `suppliers.country` (migration 0004) to
+  keep the prototype's Suppliers field.
+- SheetJS **0.18.5 (CDN)** → **0.20.3 self-hosted + SRI**.
 
 ---
 

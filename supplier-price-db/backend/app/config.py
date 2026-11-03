@@ -45,6 +45,10 @@ class Config:
     environment: str = "development"   # 'development' | 'production'
     db_path: str = str(BACKEND_DIR / "data" / "pricedb.db")
     allowed_emails: list[str] = field(default_factory=list)
+    # Origins allowed to make state-changing calls (CSRF defence). In dev the localhost
+    # origins are always accepted; in production the app's own public origin must be set.
+    public_origin: str = ""
+    allowed_origins: list[str] = field(default_factory=list)
     access: AccessConfig = field(default_factory=AccessConfig)
     fx: FxConfig = field(default_factory=FxConfig)
 
@@ -56,6 +60,43 @@ class Config:
         if not email:
             return False
         return email.strip().lower() in {e.strip().lower() for e in self.allowed_emails}
+
+    def csrf_origins(self) -> set[str]:
+        """The exact Origin header values a state-changing request may carry."""
+        origins = {o.strip().rstrip("/") for o in self.allowed_origins if o.strip()}
+        if self.public_origin.strip():
+            origins.add(self.public_origin.strip().rstrip("/"))
+        if not self.is_production:
+            for host in ("127.0.0.1", "localhost"):
+                origins.add(f"http://{host}:{self.port}")
+                origins.add(f"http://{host}")
+        return origins
+
+    def check_production_security(self) -> None:
+        """Fail fast at startup if production is missing its gate (owner security point 1).
+
+        Production MUST front the app with Cloudflare Access: JWT verification on, a team
+        name and AUD tag present, and a non-empty email allow-list. A misconfigured server
+        refuses to start rather than serve price data unauthenticated."""
+        if not self.is_production:
+            return
+        problems = []
+        if not self.access.enabled:
+            problems.append("[access] enabled = false")
+        if not self.access.team_name.strip():
+            problems.append("[access] team_name is empty")
+        if not self.access.aud_tag.strip():
+            problems.append("[access] aud_tag is empty")
+        if not self.allowed_emails:
+            problems.append("[identity] allowed_emails is empty")
+        if not self.public_origin.strip():
+            problems.append("[server] public_origin is empty (needed for the Origin/CSRF check)")
+        if problems:
+            raise RuntimeError(
+                "refusing to start in production without the security gate: "
+                + "; ".join(problems)
+                + ". Set these in config.toml (see config.example.toml) or run with "
+                  "environment = 'development' locally.")
 
 
 def _load_toml(path: Path) -> dict:
@@ -87,6 +128,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         environment=server.get("environment", "development"),
         db_path=db_path,
         allowed_emails=list(identity.get("allowed_emails", [])),
+        public_origin=server.get("public_origin", ""),
+        allowed_origins=list(server.get("allowed_origins", [])),
         access=AccessConfig(
             enabled=bool(access.get("enabled", False)),
             team_name=access.get("team_name", ""),
@@ -118,5 +161,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         cfg.access.team_name = os.environ["PRICEDB_ACCESS_TEAM"]
     if "PRICEDB_ACCESS_AUD" in os.environ:
         cfg.access.aud_tag = os.environ["PRICEDB_ACCESS_AUD"]
+    if "PRICEDB_PUBLIC_ORIGIN" in os.environ:
+        cfg.public_origin = os.environ["PRICEDB_PUBLIC_ORIGIN"]
 
     return cfg

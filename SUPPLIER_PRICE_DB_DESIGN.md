@@ -513,6 +513,8 @@ Upload a customer file of **EAN + target price**; the tool tells you **which sup
 
 All of O1–O7 are now **decided**. The Phase-1 schema (migrations 0001/0002) reserved columns for the then-open outcomes; migration **`0003_decided_schema`** (2026-11-02) then brought it to the decided model — dropping the reserved offer columns (`pieces_per_box`, `price_basis`, `raw_row`, `available_qty`, offer-level `moq`, `valid_until`) and `products.size`, adding the batch-level `brand`/`moq`(free text)/`lead_time`/`notes`/`ended_at`, and removing the freshness settings (default FX basis → `today`). So the resolutions are a mix of config/logic **and** this one reversible migration (with its `.down.sql`); any later schema change follows the same numbered-migration discipline (build plan §0).
 
+Migration **`0004_frontend_support`** (2026-11-03, Step B) then added `suppliers.country` (a prototype Suppliers field) and the **data-minimised customer-request store** (`requests` + `request_lines`): only EAN, target price, currency and an optional company name/brand are kept — no contact details, the uploaded file is not stored, and the sourcing result is recomputed live (§9), never snapshotted. Step B also built the frontend on the API and the standard security measures (production Access gate, CSP, Origin/validation, XSS-safe rendering, SheetJS self-hosted + SRI) — see build plan §7.5/§7.6; an independent security review is the pre-cutover gate.
+
 | # | Decision | Status (date) | Resolution |
 |---|---|---|---|
 | O1 | CRM link direction | **DECIDED 2026-11-02** | **No link.** Comparison tool only; manual handoff via the CRM Purchases tab (§5). All link options and the one-click step removed. |

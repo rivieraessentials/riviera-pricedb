@@ -10,7 +10,7 @@ def test_healthz_ok(client):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok" and body["db"] == "ok"
-    assert body["migrations"] == [1, 2, 3]      # 0001 + 0002 + 0003_decided_schema
+    assert body["migrations"] == [1, 2, 3, 4]   # 0001 + 0002 + 0003_decided + 0004_frontend
     assert body["environment"] == "development"
     assert body["access_enabled"] is False      # OFF by default in dev
 

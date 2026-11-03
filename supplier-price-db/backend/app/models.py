@@ -109,6 +109,40 @@ class FxRefreshOut(BaseModel):
     source: str                    # 'frankfurter' | 'ecb'
 
 
+class SupplierUpdate(BaseModel):
+    name: str | None = None
+    country: str | None = None
+
+
+class ProductCreate(BaseModel):
+    ean: str
+    description: str | None = None
+    brand: str | None = None               # brand name; created if new (the "Add line" form)
+
+
+class ProductUpdate(BaseModel):
+    description: str | None = None
+    brand: str | None = None               # "" clears the brand; omit to leave unchanged
+
+
+class BestsellerSet(BaseModel):
+    is_bestseller: bool
+
+
+class RequestLineIn(BaseModel):
+    ean: str
+    target_price: str                      # exact decimal string, the target's own currency
+    currency: str = "EUR"
+
+
+class RequestCreate(BaseModel):
+    customer: str | None = None            # OPTIONAL company name only (no contact details, §9)
+    brand: str | None = None
+    request_date: str | None = None
+    margin: str = "0.07"                   # min margin as a decimal fraction
+    lines: list[RequestLineIn]
+
+
 class CurrentBestOut(BaseModel):
     best_offer_id: int
     best_unit_price_eur: str
@@ -120,5 +154,6 @@ class ProductOffersOut(BaseModel):
     ean: str
     product_id: int
     description: str | None = None
+    brand: str | None = None
     offers: list[OfferHistoryItem]
     current_best: CurrentBestOut | None = None

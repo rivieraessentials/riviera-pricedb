@@ -9,12 +9,13 @@ def _cols(conn, table):
 def test_migrate_is_idempotent(tmp_path):
     conn = db.connect(str(tmp_path / "m.db"))
     applied = db.migrate(conn)
-    assert applied == [1, 2, 3]
+    assert applied == [1, 2, 3, 4]
     assert db.migrate(conn) == []              # nothing left to apply
-    assert db.applied_versions(conn) == [1, 2, 3]
+    assert db.applied_versions(conn) == [1, 2, 3, 4]
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for t in ("brands", "suppliers", "products", "offer_batches", "offers", "fx_rates",
-              "current_best", "settings", "review_queue", "schema_migrations"):
+              "current_best", "settings", "review_queue", "requests", "request_lines",
+              "schema_migrations"):
         assert t in names
     conn.close()
 
@@ -22,19 +23,22 @@ def test_migrate_is_idempotent(tmp_path):
 def test_rollback_then_reapply(tmp_path):
     conn = db.connect(str(tmp_path / "m.db"))
     db.migrate(conn)
-    # 0003 shaped the schema to the decided columns
+    # 0003 shaped the schema to the decided columns; 0004 added the frontend-support fields
     assert "brand" in _cols(conn, "offer_batches")
+    assert "country" in _cols(conn, "suppliers")
     assert "raw_row" not in _cols(conn, "offers")
     assert "size" not in _cols(conn, "products")
 
-    db.rollback(conn, steps=1)                 # reversible: drops only 0003
+    db.rollback(conn, steps=2)                 # reversible: drops 0004 then 0003
     assert db.applied_versions(conn) == [1, 2]
+    assert "country" not in _cols(conn, "suppliers")
     assert "brand" not in _cols(conn, "offer_batches")
     assert "raw_row" in _cols(conn, "offers")  # 0001 structure restored
 
     db.migrate(conn)                           # re-apply cleanly
-    assert db.applied_versions(conn) == [1, 2, 3]
+    assert db.applied_versions(conn) == [1, 2, 3, 4]
     assert "brand" in _cols(conn, "offer_batches")
+    assert "country" in _cols(conn, "suppliers")
     conn.close()
 
 

@@ -56,3 +56,13 @@ def test_manual_override_via_api(client):
 def test_manual_override_rejects_bad_rate(client):
     r = client.post("/fx/rates", json={"rate_date": "2026-11-03", "currency": "USD", "rate": "0"})
     assert r.status_code == 400
+
+
+def test_manual_rate_wins_over_fetched(conn):
+    """Owner check (not new behaviour): a manual override replaces a fetched rate for the
+    same day + currency (the upsert in repo.set_fx_rate)."""
+    repo.set_fx_rate(conn, "2026-11-03", "USD", "1.0825", "frankfurter")
+    repo.set_fx_rate(conn, "2026-11-03", "USD", "1.1000", "manual")
+    assert repo.get_fx_rate(conn, "2026-11-03", "USD") == "1.1000"
+    row = conn.execute("SELECT source FROM fx_rates WHERE rate_date='2026-11-03' AND currency='USD'").fetchone()
+    assert row["source"] == "manual"

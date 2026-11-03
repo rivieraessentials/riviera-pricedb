@@ -198,6 +198,31 @@ forgotten.
 
 ---
 
+---
+
+## Server hardening checklist (security point 6, owner 2026-11-03)
+
+Apply at server setup (step D), verify at the Security gate (step E):
+
+1. **Identity is now enforced in code too** (no longer just the tunnel). Set in `config.toml` on the server:
+   `[server] environment = "production"`, `public_origin = "https://prices.rivieraessentials.com"`;
+   `[access] enabled = true`, `team_name`, `aud_tag`; `[identity] allowed_emails = [MAIN, BACKUP]`. The app
+   **refuses to start** if any of these is missing in production (`config.check_production_security()`), so a
+   misconfigured box fails closed instead of serving data unauthenticated.
+2. **Run as a non-root user.** The systemd unit runs as a dedicated service user (e.g. `pricedb`), not root:
+   `User=pricedb`, `Group=pricedb`, plus `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`,
+   `PrivateTmp=true`, and `ReadWritePaths=/data/pricedb`.
+3. **Data file permissions.** `/data/pricedb` owned by `pricedb:pricedb`, mode `0700` on the dir and `0600` on
+   `pricedb.db*` — readable only by that user.
+4. **Restart + logs.** `Restart=on-failure`. Access logs record method, path and status **only** — never row
+   contents or request bodies (the app logs no offer data; keep uvicorn access logging at defaults).
+5. **Backups.** Add `/data/pricedb` to the existing **restic** schedule and run a **restore drill** (restore to a
+   scratch dir, open the DB, confirm `SELECT count(*) FROM offers`) before cutover, then periodically.
+6. **The download bundle is the whole database** — keep it only on the encrypted drive (the UI says so by the
+   button). Never commit it or any real supplier/customer file to the repo.
+
+---
+
 **In one line:** create the Access app + shared two‑email policy and the second Cloudflare admin **first**
 (dashboard), add the tunnel ingress for `:8001` and validate (server), add the proxied DNS CNAME
 (dashboard), then **reload cloudflared in a quiet window** (the only possible CRM blip), and verify the

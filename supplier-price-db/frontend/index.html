@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Riviera Price DB</title>
+<link rel="stylesheet" href="/static/styles.css"/>
+<!-- SheetJS 0.20.3, self-hosted, pinned with Subresource Integrity (no CDN at runtime). -->
+<script src="/static/vendor/xlsx.full.min.js"
+        integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
+        crossorigin="anonymous"></script>
+</head>
+<body>
+<div class="sidebar">
+  <div class="logo"><div class="logo-main">🌿 Riviera Price DB</div><div class="logo-sub">supplier offer intelligence</div></div>
+  <div class="nav-section">Compare</div>
+  <div class="nav-item active" data-view="rankings"><span class="ic">▦</span> Offers</div>
+  <div class="nav-item" data-view="bestsellers"><span class="ic">★</span> Bestsellers</div>
+  <div class="nav-item" data-view="requests"><span class="ic">🎯</span> Customer requests</div>
+  <div class="nav-section">Data</div>
+  <div class="nav-item" data-view="suppliers"><span class="ic">🏭</span> Suppliers</div>
+  <div class="nav-item" data-view="import"><span class="ic">⬆</span> Import log</div>
+  <div class="nav-item" data-view="review"><span class="ic">⚠</span> Review queue <span class="ct" id="nav-review">0</span></div>
+  <div class="nav-item" data-view="settings"><span class="ic">⚙</span> Currency &amp; FX</div>
+  <div class="sfooter">Data saved on the server<br><span id="foot-stats"></span></div>
+</div>
+<div class="main">
+  <div class="topbar"><div class="page-title" id="ptitle">Offers</div>
+    <div class="tbar-r"><span class="fl" style="margin:0">Display</span><select id="cur"></select></div></div>
+  <div class="content" id="content"></div>
+</div>
+<div id="dropveil">⬇ Drop the Excel offer to import</div>
+<input type="file" id="addfile" accept=".xlsx,.xls" style="display:none"/>
+<input type="file" id="reqfile" accept=".xlsx,.xls" style="display:none"/>
+<div class="modal-overlay" id="modal"><div class="modal" id="modalbox"></div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

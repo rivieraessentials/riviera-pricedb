@@ -22,12 +22,18 @@ app/
   offer_types.py the two offer types: stored code (price_list/stock_offer) -> display name
   fx.py          daily FX fetch (Frankfurter -> ECB fallback), base EUR, no key; `python -m app.fx`
   export.py      the offline download bundle (SQLite snapshot + offers/current_best CSVs)
+  sourcing.py    customer-request sourcing (§9) — recomputed live from current_best, never stored
+  validate.py    server-side input validation + limits (EANs, prices, row counts, body size)
+  security.py    CSP + hardening headers; Origin / JSON guard on state-changing requests
   auth.py        Cloudflare Access JWT verify — defence-in-depth, OFF by default in dev
   models.py      API shapes; prices cross the wire as strings (exact, never float)
-  main.py        FastAPI app: /healthz + suppliers / batches / offers / end-offer / history
-                 + fx (/fx/rates, /fx/refresh) + /export (download bundle)
+  main.py        FastAPI app: health + suppliers / batches / offers / end-offer / history
+                 + fx + export + grid / bestsellers / review / products / requests; serves the
+                 single-page frontend ("/" + /static)
+  migrations/    … + 0004_frontend_support (suppliers.country + the request store)
 tests/           pytest — core + money + importer + migrations + API + scenario + replacement
-                 + fx + export tests
+                 + fx + export + frontend-API + security tests
+../frontend/     the UI (index.html, styles.css, app.js, vendor/xlsx.full.min.js) — served by main.py
 ```
 
 ## Run
@@ -70,6 +76,35 @@ a stock offer counting. No age-based expiry; no `freshness_rule` setting (`§3.3
   rate. The per-batch override (`offer_batches.fx_rate_eur` + `fx_locked`) is separate and wins for that batch.
 - **Offline download bundle** (`GET /export`): a ZIP with a consistent **SQLite snapshot** (backup API, WAL-safe)
   plus plain **`offers.csv`** and **`current_best.csv`** — the 3-2-1 local copy (design §6). Business data only.
+
+## Frontend (Step B)
+
+The single-page UI lives in `../frontend` and is served by this app: `GET /` returns `index.html`, and
+`/static/*` serves `styles.css`, `app.js` and `vendor/xlsx.full.min.js`. It ports the prototype's seven
+screens onto the API — Offers grid (live columns only, the replacement rule), Bestsellers, Customer requests
+(sourcing), Suppliers, Import log, Review queue, Currency & FX — and talks to the API with same-origin JSON.
+All data lives on the server; `localStorage` holds only the grid zoom. **SheetJS 0.20.3** is self-hosted with
+SRI (no CDN at runtime); its Apache-2.0 notice is `vendor/xlsx.LICENSE.txt`. See the build plan §7.6 for the
+(decision-driven) differences from the prototype.
+
+New endpoints driving it: `/brands`, `/suppliers` (+ `PATCH`), `/grid`, `/bestsellers`, `/batches` (+
+`GET {id}/offers`, `DELETE {id}`), `/review`, `/products` (`POST`, `PATCH {ean}`, `POST {ean}/bestseller`),
+`/customers`, and `/requests` (`POST`/`GET`/`GET {id}`/`DELETE`). A request stores inputs only; the result is
+recomputed live by `app.sourcing`.
+
+## Security (built into Step B — owner, 2026-11-03)
+
+- **Production Access gate:** `config.check_production_security()` makes the app refuse to start in
+  `environment = production` unless Access JWT is ON (team + AUD tag), the email allow-list is non-empty, and
+  `public_origin` is set. OFF only in local dev. See `config.example.toml` and the subdomain runbook.
+- **CSP + headers** (`app.security`): a strict `Content-Security-Policy` (this origin only; no inline scripts),
+  plus `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on every response.
+- **Origin / JSON / size guard:** state-changing requests must send JSON and an Origin matching the app's own
+  (CSRF defence); a 16 MB body cap.
+- **Validation** (`app.validate`): EAN digits/length (+ check digit on import), positive prices under a cap,
+  row-count limits, parameterised SQL only — clear 4xx on bad input.
+- **XSS:** the frontend renders every supplier/user value as text (no inline handlers, no `innerHTML` of data).
+- An **independent security review by a separate agent** is the pre-cutover gate (build plan step E).
 
 ## Identity / Cloudflare Access (OFF by default)
 `config.toml` carries an **email allow-list** (any number of addresses, never hardcoded).
