@@ -7,6 +7,10 @@ prototype.html
 # Local config holds the Cloudflare Access allow-list / settings — commit config.example.toml instead
 config.toml
 
+# Secrets — GitHub 2FA recovery codes must NEVER be committed (belong off the repo entirely)
+github-recovery-codes.txt
+*recovery*
+
 # Python virtualenvs
 .venv*/
 

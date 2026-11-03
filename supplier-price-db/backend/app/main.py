@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager, contextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from . import db, importer, money, repo
+from . import db, importer, money, offer_types, repo
 from .auth import Identity, require_identity
 from .config import Config, load_config
 from .models import (
@@ -125,7 +125,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             items = [
                 OfferHistoryItem(
                     offer_id=v.offer_id, batch_id=v.batch_id, supplier_id=v.supplier_id,
-                    currency=v.currency, kind=v.kind,
+                    currency=v.currency, kind=v.kind, kind_label=offer_types.kind_label(v.kind),
                     price_original=str(v.price_original), price_eur=str(v.price_eur),
                     unit_price_eur=str(v.unit_price_eur), fx_rate_eur=v.fx_rate_eur,
                     received_date=v.received_date, ended_at=v.ended_at, created_at=v.created_at,

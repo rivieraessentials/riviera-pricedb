@@ -81,7 +81,8 @@ class OfferHistoryItem(BaseModel):
     batch_id: int
     supplier_id: int
     currency: str
-    kind: str | None = None
+    kind: str | None = None           # stored code: 'price_list' | 'stock_offer'
+    kind_label: str | None = None     # display name (offer_types.kind_label), e.g. "Regular offer"
     price_original: str        # the stored per-piece 2dp price
     price_eur: str             # computed on read
     unit_price_eur: str        # per single piece, computed on read

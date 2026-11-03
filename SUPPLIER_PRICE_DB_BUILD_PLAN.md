@@ -221,9 +221,12 @@ EUR/per-piece **computed on read** (design §12 O5); **data minimisation — no 
   brand, T1/T2, currency, offer date, offer type, MOQ. No size, no stock qty, no raw rows, no originals.
 - **Per-piece prices**: per-box divided by pieces/box at import (not stored), then rounded.
 - **Rounding** (O6): all prices to **2dp, half-up** (matches Excel's half-away-from-zero). No `raw_row`.
-- **Freshness / replacement** (O2): no age expiry; replacement per **(supplier, brand, offer type)** — a newer
-  price list / stock offer replaces the previous of the **same brand** only; different brands never replace;
-  stock offers end via an **"End offer"** action. Multi-brand uploads replace per brand present (default, confirm later).
+- **Freshness / replacement** (O2, **final 2026-11-03 — design item 29**): no age expiry; one rule for both
+  types, single- and multi-brand alike — a new **regular** / **stock** offer replaces the previous offer of the
+  **same type** for **each brand present in the file**; different brands never replace; regular and stock never
+  replace each other; stock offers additionally drop out via **"End offer"** (`ended_at`). The two types are now
+  named **"Regular offer (longer validity)"** (`price_list`) and **"Stock offer (limited in time and/or
+  quantity)"** (`stock_offer`) — stored codes unchanged.
 - **MOQ** (O3): **free text**, both kinds, **display-only, never parsed/ranked**.
 - **Lead time & notes:** kept as **free-text** batch fields ("business info only — no personal details").
 - **Brand:** always from the upload form, **never from the file**; single-brand conflict (EAN under another brand)
@@ -231,11 +234,69 @@ EUR/per-piece **computed on read** (design §12 O5); **data minimisation — no 
 - **FX default** (O4): **today's rate**, original currency always shown; manual override wins.
 - **Originals** (O7): **not kept** — parse and discard; checksum-only dedupe.
 
-**Still open:** none. All of O1–O7 are decided (design §12). The schema reserved for every outcome, so each is
-config/logic, not a migration; **Phases 1–5 can proceed.**
+**Still open:** none. All of O1–O7 are decided (design §12). Migration **`0003_decided_schema`** brought the
+Phase-1 schema to the decided model (reversible, with its `.down.sql`); any later schema change is another
+numbered migration (§0). **Phases 1–5 can proceed.**
 
 None of this is one-way: every phase is a small, reversible, rehearse-then-verify step, and after cutover each
 change is a one-file redeploy that never touches your data.
+
+---
+
+## 7. MVP scope & go-live plan (owner-confirmed 2026-11-03)
+
+**Approach (owner):** ship a minimum first version the owner can use for real, go live, then add the rest.
+
+### 7.1 In the first version (MVP)
+
+- **Import offers** — the upload wizard (supplier, brand, territory, currency, offer date, **offer type** [Regular
+  offer | Stock offer], MOQ / lead time / notes), per-box divide-then-round, and the **review queue** (resolve
+  EAN-under-another-brand, unknown-EAN, checksum fails).
+- **Best price per product** — the grid + drill-down, cheapest-first, on the live/replacement rule (§3.3).
+- **Currency** — EUR default with the original shown alongside; manual override; a daily FX fetch.
+- **End offer** on a stock offer.
+- **Brands / Suppliers / Products** basic management + **bestseller flag + highlight** (not a separate ranking page).
+- **Customer-request sourcing (design §9)** — upload a customer's EAN + target price list, check against current
+  best prices at the adjustable margin (default 7%); show qualifying suppliers, achieved margin, lines no supplier
+  can meet, and unknown EANs. **No CRM step** (O1 — the "→ Create CRM offer" button is removed).
+- **Two-offer comparison** — pick two offers, show them side by side with a % difference column.
+- **Offline export/download** bundle (3-2-1) + **login/hosting/backup** (Cloudflare Access, tunnel, systemd, restic + restore drill).
+
+**Sourcing data minimisation (owner, 2026-11-03):** a saved request stores **only EAN, target price, currency and
+(optional) customer COMPANY name** — plus optional brand/date. **No contact details.** The uploaded request file
+is **not kept**. The sourcing result (which supplier wins, at what buy price, achieved margin) is **recomputed live**
+against `current_best` on each view — **not** snapshotted into the request — so it is always current and nothing
+extra is stored. *(This slims the prototype's `requests`, which persisted the full result incl. supplier names and
+buy prices; see the conflict note handed to the owner 2026-11-03.)*
+
+### 7.2 Deferred to after go-live
+
+Separate **bestseller ranking page** (the flag + highlight stay); **per-supplier column-mapping templates** (MVP
+maps columns per import, pre-filled by a guess the owner confirms; templates are added once the real-file test
+shows the patterns — §7 of the design); **brand-alias management UI**.
+
+### 7.3 Every remaining step to go-live, and who's needed
+
+| Step | What | Who |
+|---|---|---|
+| **A. Backend finish** | FX daily fetch (Frankfurter → ECB fallback) + manual override; export/download bundle | me |
+| **B. Frontend** | port the screens onto the API — wizard, grid/drill-down, review queue, currency toggle, end-offer, bestseller flag, settings, export, **sourcing**, **two-offer comparison**; self-host **SheetJS 0.20.3 + SRI**; sourcing/comparison backend endpoints | me |
+| **C. Real-file acceptance** | run ~10 real supplier files locally (mix of regular/stock, multi-brand, non-EUR); measure review rate, correctness, per-supplier mapping; files stay **outside the repo, never committed** | **owner** provides files; me to analyse/adjust |
+| **D. Server setup** | subdomain DNS; **Cloudflare Access app** (AUD tag) + shared policy; **tunnel** ingress → `:8001`; **systemd** unit; add `/data/pricedb` to restic + **restore drill** | **owner** (Cloudflare/DNS) + a **quiet evening** (shared box — a blip can touch the CRM) |
+| **E. Cutover** | deploy, smoke test (import a real file, best price, currency, end-offer, sourcing, export), hand over | me + owner verify |
+
+### 7.4 Honest estimate (working sessions) + uncertainty
+
+- **A** — ~1–2 sessions (**built this turn**: FX fetch + manual override + export bundle).
+- **B** — **4–6 sessions. Most uncertain by scope** — the larger surface now includes sourcing + the comparison
+  tool and the SheetJS self-host/SRI step.
+- **C** — 1–2 sessions, **high uncertainty**: depends on how messy the real files are; can loop back into B.
+- **D** — 1–2 sessions of work, **calendar-gated** by owner/Cloudflare access and the quiet-evening rule; the
+  Access-app/tunnel wiring is the main operational unknown (the subdomain runbook de-risks it).
+- **E** — ~1 session.
+
+**Total ≈ 8–13 working sessions** (was ~7–12 before sourcing + comparison moved into the MVP). Biggest risks:
+**(1)** the frontend breadth + real-file messiness (B/C), **(2)** the Cloudflare Access/tunnel stand-up (D).
 
 ---
 
