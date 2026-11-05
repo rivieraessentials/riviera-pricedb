@@ -122,6 +122,23 @@ def test_unknown_brand_tab_then_resolved_by_later_branded_offer(client):
     assert not any(r["ean"] == ean for r in client.get("/grid", params={"unknown": "true"}).json()["rows"])
 
 
+def test_multibrand_import_files_by_file_brand_column(client):
+    s = _supplier(client, "StanCo")
+    b = client.post("/batches", json={"supplier_id": s, "currency": "EUR", "kind": "price_list",
+                                      "brand": "(multi-brand)", "fx_rate_eur": "1"}).json()
+    e_w = make_ean("500000000124"); e_f = make_ean("500000000131"); e_u = make_ean("500000000148")
+    # multi-brand with a file brand column: the frontend sends a per-row brand only for known /
+    # owner-approved names; a row with no brand goes to Unknown.
+    client.post("/offers", json={"batch_id": b["batch_id"], "brand_mode": "multi", "brand": None,
+        "offers": [{"ean": e_w, "quoted_price": "5.00", "brand": "Wella"},
+                   {"ean": e_f, "quoted_price": "6.00", "brand": "Filorga"},
+                   {"ean": e_u, "quoted_price": "7.00"}]})
+    assert any(r["ean"] == e_w for r in client.get("/grid", params={"brand": "Wella"}).json()["rows"])
+    assert any(r["ean"] == e_f for r in client.get("/grid", params={"brand": "Filorga"}).json()["rows"])
+    unk = client.get("/grid", params={"unknown": "true"}).json()["rows"]
+    assert any(r["ean"] == e_u for r in unk) and not any(r["ean"] in (e_w, e_f) for r in unk)
+
+
 def test_request_stores_inputs_and_recomputes_live(client):
     s1 = _supplier(client, "Alpha")
     ean = make_ean("500000000070")

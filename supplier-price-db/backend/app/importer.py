@@ -111,9 +111,19 @@ def import_rows(conn, batch_id: int, rows: list[dict], *,
         existing = repo.get_product_by_ean(conn, ean)
 
         if brand_mode == "multi":
-            # brand comes from the existing product; unknown EAN -> new needs-review product.
+            # Per-row brand from the file column (§2.5) when the caller supplies it — only known
+            # or owner-approved names are sent, so creating it here is safe. Otherwise the brand
+            # comes from the existing product; an unknown EAN with no brand -> Unknown + review.
+            row_brand = (row.get("brand") or "").strip()
+            row_brand_id = repo.get_or_create_brand(conn, row_brand) if row_brand else None
             if existing is not None:
                 pid = int(existing["product_id"])
+                if row_brand_id is not None and existing["brand_id"] is None:
+                    repo.assign_brand(conn, pid, row_brand_id)   # fill a missing brand from the file
+            elif row_brand_id is not None:
+                pid = repo.create_product(conn, ean, description=row.get("description"),
+                                          brand_id=row_brand_id, status="active",
+                                          first_seen_batch_id=batch_id)
             else:
                 pid = repo.create_product(conn, ean, description=row.get("description"),
                                           brand_id=None, status="needs_review",

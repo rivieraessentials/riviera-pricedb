@@ -47,6 +47,8 @@ class OfferIn(BaseModel):
     quoted_price: str | None = Field(None, description="price as quoted, exact decimal string")
     prices: list[str] | None = None          # several price columns; the lowest positive is used (§2.4)
     description: str | None = None
+    brand: str | None = None                 # multi-brand only: this row's brand from the file column
+                                             # (sent only for known or owner-approved brands; §2.5)
     # per-box rows only — used to divide at import, NOT stored (§1.2):
     pieces_per_box: int | None = None
     price_basis: str = "per_piece"           # 'per_piece' | 'per_box'
