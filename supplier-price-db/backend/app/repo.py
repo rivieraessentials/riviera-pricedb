@@ -459,14 +459,24 @@ def delete_batch(conn: sqlite3.Connection, batch_id: int) -> list[int]:
     return touched
 
 
-def brand_grid(conn: sqlite3.Connection, brand_id: int,
+def brand_grid(conn: sqlite3.Connection, brand_id: int | None,
               territory: str | None = None) -> tuple[list[dict], list[dict]]:
     """The Offers grid for one brand: LIVE offer columns (the replacement rule, §3.3) and a row
     per product with that supplier's live per-piece EUR price. 'Best' is the cheapest shown cell.
-    Superseded and ended offers are not columns here (they remain in each product's history)."""
-    prods = conn.execute(
-        "SELECT product_id, ean, description, is_bestseller FROM products "
-        "WHERE brand_id = ? ORDER BY description COLLATE NOCASE", (brand_id,)).fetchall()
+    Superseded and ended offers are not columns here (they remain in each product's history).
+
+    brand_id=None is the **Unknown brands** tab: products not yet assigned a brand (e.g. the
+    not-yet-matched rows of a multi-brand upload). They stay here until a branded offer for the
+    same EAN arrives and assigns the brand (importer §2.5), which moves them to that brand's tab.
+    """
+    if brand_id is None:
+        prods = conn.execute(
+            "SELECT product_id, ean, description, is_bestseller FROM products "
+            "WHERE brand_id IS NULL ORDER BY description COLLATE NOCASE").fetchall()
+    else:
+        prods = conn.execute(
+            "SELECT product_id, ean, description, is_bestseller FROM products "
+            "WHERE brand_id = ? ORDER BY description COLLATE NOCASE", (brand_id,)).fetchall()
 
     batch_meta: dict[int, dict] = {}
     rows: list[dict] = []

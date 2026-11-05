@@ -104,6 +104,24 @@ def test_review_lists_missing_brand(client):
     assert any("brand" in r for r in reasons)
 
 
+def test_unknown_brand_tab_then_resolved_by_later_branded_offer(client):
+    s1 = _supplier(client, "Alpha")
+    ean = make_ean("500000000117")
+    # multi-brand import of an unknown EAN -> no brand -> shows in the Unknown-brands tab
+    _import(client, s1, "(multi-brand)", ean, "3.00", mode="multi")
+    unk = client.get("/grid", params={"unknown": "true"}).json()
+    assert unk["unknown"] is True and any(r["ean"] == ean for r in unk["rows"])
+    assert client.get("/grid", params={"brand": "Filorga"}).status_code == 404   # brand not created yet
+    # a branded offer for a NEW brand with the same EAN arrives -> product is assigned that brand,
+    # and both suppliers' prices now compare under it
+    s2 = _supplier(client, "Beta")
+    _import(client, s2, "Filorga", ean, "2.50", mode="single")
+    g = client.get("/grid", params={"brand": "Filorga"}).json()
+    row = [r for r in g["rows"] if r["ean"] == ean]
+    assert row and row[0]["best_eur"] == "2.50" and len(row[0]["prices"]) == 2   # Alpha + Beta compare
+    assert not any(r["ean"] == ean for r in client.get("/grid", params={"unknown": "true"}).json()["rows"])
+
+
 def test_request_stores_inputs_and_recomputes_live(client):
     s1 = _supplier(client, "Alpha")
     ean = make_ean("500000000070")

@@ -146,7 +146,7 @@ let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom"))
 const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [] };
 let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null;
 
-function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (12 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (8 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(118 * gridZoom) + "px"); }
+function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (11 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (5 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(102 * gridZoom) + "px"); r.setProperty("--prod-w", Math.round(170 * gridZoom) + "px"); }
 function setZoom(d) { gridZoom = Math.min(1.5, Math.max(0.6, Math.round((gridZoom + d * 0.1) * 10) / 10)); try { localStorage.setItem("pdbZoom", gridZoom); } catch (e) {} applyZoom(); render(); }
 function brandList() { return store.brands.slice().sort((a, b) => a.name.localeCompare(b.name)); }
 function curOrder() { return ["EUR", ...Object.keys(store.fx.rates || {}).filter(c => c !== "EUR")]; }
@@ -184,16 +184,22 @@ async function render() {
 
 // ======================= OFFERS =======================
 VIEWS.rankings = async function (c) {
-  if (!store.brands.length) { c.innerHTML = '<div class="empty"><div class="ei">▦</div><div>No brands yet — import a supplier file to begin.</div></div>' + toolbarHTML(); wireNothing(); return; }
-  if (!activeBrand || !store.brands.some(b => b.name === activeBrand)) activeBrand = brandList()[0].name;
-  const data = await apiGet("/grid?brand=" + encodeURIComponent(activeBrand) + (terrFilter !== "all" ? "&territory=" + terrFilter : ""));
+  const brands = brandList();
+  const UNK = "__unknown__";
+  if (activeBrand !== UNK && (!activeBrand || !brands.some(b => b.name === activeBrand)))
+    activeBrand = brands.length ? brands[0].name : UNK;
+  const unknown = activeBrand === UNK;
+  const terr = terrFilter !== "all" ? "&territory=" + terrFilter : "";
+  const data = await apiGet(unknown ? "/grid?unknown=1" + terr
+                                    : "/grid?brand=" + encodeURIComponent(activeBrand) + terr);
   _gridRows = {}; data.rows.forEach(r => { _gridRows[r.ean] = r; });
   let bs = data.batches.slice();
   if (colOrder[activeBrand]) { const ord = colOrder[activeBrand]; bs.sort((a, b) => (ord.indexOf(a.batch_id) < 0 ? 999 : ord.indexOf(a.batch_id)) - (ord.indexOf(b.batch_id) < 0 ? 999 : ord.indexOf(b.batch_id))); }
   const showDiff = cmpA && cmpB && bs.some(b => b.batch_id == cmpA) && bs.some(b => b.batch_id == cmpB);
 
   let h = toolbarHTML();
-  h += '<div class="pills">' + brandList().map(b => `<div class="pill ${b.name === activeBrand ? "active" : ""}" data-act="brand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") + "</div>";
+  h += '<div class="pills">' + brands.map(b => `<div class="pill ${b.name === activeBrand ? "active" : ""}" data-act="brand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") +
+    `<div class="pill ${unknown ? "active" : ""}" data-act="brand" data-brand="${UNK}" title="products whose brand isn't known yet — they move to a brand's tab when a branded offer for that EAN is imported">❓ Unknown brands</div>` + "</div>";
   h += `<div class="cmprow"><b>Compare →</b> tick the ☆ in two column headers to show a Δ% column. ${(cmpA || cmpB) ? '<button class="sm" data-act="cmpclear">clear</button>' : '<span class="muted">(then the grid narrows to those two)</span>'}</div>`;
 
   let prods = data.rows.slice();
@@ -205,6 +211,12 @@ VIEWS.rankings = async function (c) {
 
   let cols = bs; if (showDiff) cols = [bs.find(b => b.batch_id == cmpA), bs.find(b => b.batch_id == cmpB)];
   _curCols = bs.map(b => b.batch_id);
+  if (!prods.length) {
+    c.innerHTML = h + `<div class="empty"><div class="ei">▦</div><div>${unknown
+      ? "No unknown-brand products. Multi-brand imports drop any EAN with no known brand here; it moves to a brand's tab once a branded offer for that EAN is imported."
+      : "No products in this tab" + (searchQ ? " match your search." : " yet.")}</div></div>`;
+    return;
+  }
   h += `<div class="muted" style="margin-bottom:8px">${prods.length} products · live offers only · ◀▶ move a column · ☆ compares · click a supplier header for its price list · click a product to edit.</div>`;
   h += '<div class="grid-wrap"><table class="grid"><thead><tr><th class="c-star"></th>' +
     `<th class="c-ean lx" style="cursor:pointer" data-act="sort" data-col="ean">EAN${sortArrow("ean")}</th>` +
@@ -279,15 +291,27 @@ VIEWS.requests = async function (c) {
     let rows = reqs.slice();
     if (reqBrand !== "All") rows = rows.filter(r => r.brand === reqBrand);
     if (reqCust !== "All") rows = rows.filter(r => r.customer === reqCust);
-    hist = `<div class="card"><div class="card-title">Request history
+    // arranged per customer, then per brand, newest first within a group
+    rows.sort((a, b) => {
+      const ca = (a.customer || "~~").toLowerCase(), cb = (b.customer || "~~").toLowerCase();
+      if (ca !== cb) return ca < cb ? -1 : 1;
+      const ba = (a.brand || "~~").toLowerCase(), bb = (b.brand || "~~").toLowerCase();
+      if (ba !== bb) return ba < bb ? -1 : 1;
+      return (b.request_date || "").localeCompare(a.request_date || "");
+    });
+    let body = "", lastCust = null;
+    rows.forEach(r => {
+      const cust = r.customer || "— no customer —";
+      if (cust !== lastCust) { body += `<tr><td colspan="7" style="background:var(--bg3);font-weight:700">${esc(cust)}</td></tr>`; lastCust = cust; }
+      body += `<tr class="click" data-act="openreq" data-id="${r.request_id}"><td class="muted">${esc(fmtDate(r.request_date))}</td><td class="muted">${esc(cust)}</td><td><span class="badge badge-gray">${esc(r.brand || "any")}</span></td><td>${r.count}</td><td><span class="badge badge-green">${r.ok}</span></td><td class="muted">${esc(marginPct(r.margin))}%</td><td class="num"><button class="danger sm" data-act="delreq" data-id="${r.request_id}">🗑</button></td></tr>`;
+    });
+    if (!rows.length) body = '<tr><td colspan=7><div class="empty">No requests match the filter.</div></td></tr>';
+    hist = `<div class="card"><div class="card-title">Request history <span class="muted" style="font-weight:400">· grouped by customer, then brand</span>
         <span style="margin-left:auto;display:flex;gap:8px">
           <select data-act="reqbrand"><option ${reqBrand === "All" ? "selected" : ""}>All</option>${knownBrands.map(b => `<option ${reqBrand === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select>
           <select data-act="reqcust"><option ${reqCust === "All" ? "selected" : ""}>All</option>${custs.map(cu => `<option ${reqCust === cu ? "selected" : ""}>${esc(cu)}</option>`).join("")}</select>
         </span></div>
-      <table class="tbl"><thead><tr><th>Date</th><th>Customer</th><th>Brand</th><th>Lines</th><th>Can supply</th><th>Margin</th><th></th></tr></thead><tbody>` +
-      rows.map(r => `<tr class="click" data-act="openreq" data-id="${r.request_id}"><td class="muted">${esc(fmtDate(r.request_date))}</td><td><b>${esc(r.customer || "—")}</b></td><td><span class="badge badge-gray">${esc(r.brand || "any")}</span></td><td>${r.count}</td><td><span class="badge badge-green">${r.ok}</span></td><td class="muted">${esc(marginPct(r.margin))}%</td>
-        <td class="num"><button class="danger sm" data-act="delreq" data-id="${r.request_id}">🗑</button></td></tr>`).join("") +
-      (rows.length ? "" : '<tr><td colspan=7><div class="empty">No requests match the filter.</div></td></tr>') + "</tbody></table></div>";
+      <table class="tbl"><thead><tr><th>Date</th><th>Customer</th><th>Brand</th><th>Lines</th><th>Can supply</th><th>Margin</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`;
   }
   c.innerHTML = `<div class="alert alert-blue">Only <b>EAN &amp; target price</b> (and currency) are used — other columns are ignored and matched to the database by EAN. Choose the customer company, brand and date; requests keep inputs only and the result is recomputed live.</div>
     <div class="card"><div class="card-title">New request <button class="sm" style="margin-left:auto" data-act="reqfile">⬆ Upload Excel</button></div>
@@ -402,10 +426,11 @@ async function saveProductEdit(ean) {
   await loadStore(); closeModal(); if (brand) activeBrand = brand; render(); toast("Saved.");
 }
 function addLineModal() {
-  openModal(`<div class="detail-header"><div><h2>Add line manually</h2><div class="sub">${esc(activeBrand || "")}</div></div><div class="x" data-act="closemodal">×</div></div>
+  const curBrand = activeBrand === "__unknown__" ? "" : activeBrand;
+  openModal(`<div class="detail-header"><div><h2>Add line manually</h2><div class="sub">${esc(curBrand || "no brand (Unknown)")}</div></div><div class="x" data-act="closemodal">×</div></div>
   <div class="detail-body"><div class="grid2">
      <div><div class="fl">EAN *</div><input id="ml-ean" placeholder="13-digit barcode"/></div>
-     <div><div class="fl">Brand</div><select id="ml-brand"><option value="">— choose brand —</option>${brandList().map(b => `<option ${b.name === activeBrand ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></div>
+     <div><div class="fl">Brand</div><select id="ml-brand"><option value="">— choose brand —</option>${brandList().map(b => `<option ${b.name === curBrand ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></div>
      <div style="grid-column:1/3"><div class="fl">Description</div><input id="ml-desc" placeholder="product description"/></div></div>
    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
      <button data-act="closemodal">Cancel</button><button class="primary" data-act="saveline">Add product</button></div></div>`);
@@ -615,7 +640,8 @@ async function doImport() {
     closeModal(); view = "rankings"; activeBrand = multibrand ? activeBrand : singleBrand; searchQ = ""; terrFilter = "all"; cmpA = ""; cmpB = "";
     setActiveNav("rankings"); render();
     const nrev = (res.review || []).length;
-    toast(`Imported ${offers.length} rows from ${_pendingFile ? _pendingFile.name : "file"}\n• ${res.offer_ids.length} offers added${nrev ? "\n• " + nrev + " row(s) sent to Review" : ""}${parsed.bad ? "\n• " + parsed.bad + " rows skipped (no EAN or price)" : ""}`);
+    const revNote = nrev ? "\n• " + nrev + " row(s) need attention" + (multibrand ? " — unmatched EANs are in the ❓ Unknown brands tab + Review" : " (Review)") : "";
+    toast(`Imported ${offers.length} rows from ${_pendingFile ? _pendingFile.name : "file"}\n• ${res.offer_ids.length} offers added${revNote}${parsed.bad ? "\n• " + parsed.bad + " rows skipped (no EAN or price)" : ""}`);
   } catch (e) { toast("Import failed: " + e.message); }
 }
 
