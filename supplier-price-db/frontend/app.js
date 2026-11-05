@@ -572,7 +572,7 @@ function openImportWizard(name) {
   const brandMatch = store.brands.find(b => b.name.toLowerCase() === guess.toLowerCase());
   const brandOpts = brandList().map(b => `<option ${brandMatch && brandMatch.name === b.name ? "selected" : ""}>${esc(b.name)}</option>`).join("");
   openModal(`<div class="detail-header"><div><h2>Import offer</h2><div class="sub">${esc(name)}</div></div><div class="x" data-act="closemodal">×</div></div>
-   <div class="detail-body"><div class="alert alert-blue">Columns auto-mapped (EAN, description, price — the <b>lowest</b> price wins). <b>Single-brand file:</b> pick its brand. <b>Multi-brand file:</b> choose “🔀 Multi-brand” — each row is matched to an existing EAN; unknown EANs go to the review queue. Brands are never read from the file.</div>
+   <div class="detail-body"><div class="alert alert-blue"><b>Single-brand file:</b> pick its brand — it is applied to <b>every row</b>, so use it only when the whole file is one brand. <b>Multi-brand catalogue:</b> choose “🔀 Multi-brand” — each row’s brand is matched by <b>existing EAN</b>; rows whose brand isn’t known yet go to the <b>❓ Unknown brands</b> tab (and Review), to be resolved when a branded offer for that EAN arrives. Brands are never read from the file. Columns (EAN, description, price — lowest wins) are auto-mapped.</div>
      <div class="grid2">
        <div><div class="fl">Supplier *</div><select id="iw-sup-sel" data-act="togglenew" data-k="sup"><option value="">— choose supplier —</option>${supOpts}<option value="__new__">➕ New supplier…</option></select>
          <input id="iw-sup-new" style="display:none;margin-top:6px" placeholder="new supplier name"/></div>
