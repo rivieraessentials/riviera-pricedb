@@ -86,6 +86,28 @@ def test_product_edit_description_and_brand(client):
     assert got["description"] == "Nicer name" and got["brand"] == "Eucerin"
 
 
+def _import_desc(client, supplier_id, brand, ean, price, desc, *, date="2026-11-01"):
+    batch = client.post("/batches", json={
+        "supplier_id": supplier_id, "currency": "EUR", "kind": "price_list", "brand": brand,
+        "received_date": date, "territory": "T2", "fx_rate_eur": "1"}).json()
+    client.post("/offers", json={
+        "batch_id": batch["batch_id"], "brand_mode": "single", "brand": brand,
+        "offers": [{"ean": ean, "quoted_price": str(price), "description": desc}]})
+    return batch["batch_id"]
+
+
+def test_size_description_is_corrected_on_reimport(client):
+    s1 = _supplier(client, "Alpha")
+    ean = make_ean("500000000209")
+    _import_desc(client, s1, "Bioderma", ean, "9.00", "100 ml", date="2026-10-01")  # size slipped in
+    assert client.get(f"/products/{ean}/offers").json()["description"] == "100 ml"
+    _import_desc(client, s1, "Bioderma", ean, "9.00", "Sensibio H2O", date="2026-11-01")  # real name
+    assert client.get(f"/products/{ean}/offers").json()["description"] == "Sensibio H2O"
+    # a good name is never overwritten by a later file
+    _import_desc(client, s1, "Bioderma", ean, "9.00", "Other Label", date="2026-11-02")
+    assert client.get(f"/products/{ean}/offers").json()["description"] == "Sensibio H2O"
+
+
 def test_add_line_manual_product(client):
     ean = make_ean("500000000056")
     r = client.post("/products", json={"ean": ean, "description": "Hand added", "brand": "Bioderma"})

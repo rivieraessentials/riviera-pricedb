@@ -90,6 +90,35 @@ function eanValid(code) {
   return (10 - s % 10) % 10 === chk;
 }
 function looksEan(v) { const c = eanCanon(v); return !!(c && (c.length === 8 || c.length === 12 || c.length === 13)); }
+// A size is a number followed by a unit (100 ml, 15 Gr, 6 x 50ml, "20 ml + Stick 2 g"); the
+// product description is mainly text. A value is a size when, after dropping numbers, punctuation
+// and known unit words, nothing is left — so the size column is never mistaken for the description.
+// a unit token not glued to other letters (so "200ml" and "50g" count, but "Gel"/"Lait" don't).
+const SIZE_UNITS = /(?<![a-zà-ÿ])(ml|cl|dl|mg|kg|grs|gr|oz|lb|pcs|pces|pce|pc|caps|cap|tabs|tab|sticks|stick|st|pz|pezzi|pieces?|pièces?|stuck|stück|unidades?|un|g|l|u|x)(?![a-zà-ÿ])/gi;
+function looksSize(v) {
+  const s = (v == null ? "" : String(v)).trim();
+  if (!s || !/\d/.test(s)) return false;                 // a size always carries a number
+  const rest = s.toLowerCase().replace(SIZE_UNITS, " ").replace(/[\d.,+x×*/&()[\]\s-]/g, "");
+  return rest.length === 0;                              // only numbers + units were present
+}
+// description-like: real text (a run of letters), and not a bare size value
+function isTexty(v) { const s = (v == null ? "" : String(v)).trim(); return !!s && !looksSize(v) && /[A-Za-zÀ-ÿ]{3,}/.test(s); }
+// Choose the product-description column: the one with the most text (never size/EAN/price columns).
+function pickDescCol(sample, ncol, exclude) {
+  let bc = -1, bn = -1;
+  for (let c = 0; c < ncol; c++) {
+    if (exclude.includes(c)) continue;
+    let n = 0; sample.forEach(r => { if (isTexty(r && r[c])) n++; });
+    if (n > bn) { bn = n; bc = c; }
+  }
+  return bn >= Math.max(1, sample.length * 0.3) ? bc : -1;
+}
+// true when the column we already picked for description is actually full of sizes
+function colIsMostlySize(sample, c) {
+  let sz = 0, tot = 0;
+  sample.forEach(r => { const v = r && r[c]; if (v != null && String(v).trim()) { tot++; if (looksSize(v)) sz++; } });
+  return tot > 0 && sz >= tot * 0.6;
+}
 function detectCols(hdr) {
   const L = hdr.map(c => (c == null ? "" : String(c)).trim().toLowerCase());
   let ean = -1, desc = -1, size = -1, ppb = -1; const prices = [];
@@ -121,7 +150,10 @@ function parseSheetRows(rows) {
   const sample = rows.slice(dataStart, dataStart + 60).filter(r => r && r.some(x => x != null && x !== ""));
   if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let n = 0; sample.forEach(r => { if (looksEan(r[c])) n++; }); if (n > bn) { bn = n; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
   if (!cols.prices.length) { const cand = []; for (let c = 0; c < ncol; c++) { if (c === cols.ean) continue; let num = 0, dec = 0; sample.forEach(r => { const v = toNum(r[c]); if (v != null && v > 0) { num++; if (/\d[.,]\d/.test(String(r[c]))) dec++; } }); if (num >= Math.max(2, sample.length * 0.4) && dec >= 1) cand.push(c); } cols.prices = cand; }
-  if (cols.desc < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { if (c === cols.ean || cols.prices.includes(c)) continue; let n = 0; sample.forEach(r => { const v = r[c]; if (v != null && String(v).trim() && !/^[\d.,€$£%\s-]+$/.test(String(v))) n++; }); if (n > bn) { bn = n; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.desc = bc; }
+  { const byText = pickDescCol(sample, ncol, [cols.ean, cols.qty, ...cols.prices]);
+    // use the text column when the header gave none, or when the header's pick is really sizes
+    if (cols.desc < 0) cols.desc = byText;
+    else if (byText >= 0 && byText !== cols.desc && colIsMostlySize(sample, cols.desc)) cols.desc = byText; }
   if (cols.ean < 0 || !cols.prices.length) return { rows: [], bad: 0, ok: false };
   const out = []; let bad = 0;
   for (let r = dataStart; r < rows.length; r++) {
@@ -157,8 +189,10 @@ function parseRequestWorkbook(buf) {
     const ncol = Math.max(0, ...rows.slice(hi, hi + 60).map(r => r ? r.length : 0));
     if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let nn = 0; sample.forEach(r => { if (looksEan(r[c])) nn++; }); if (nn > bn) { bn = nn; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
     if (cols.ean < 0) return;
-    // description column: the detected one, else the widest non-numeric, non-EAN, non-price column
-    if (cols.desc < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { if (c === cols.ean || (cols.prices || []).includes(c)) continue; let n = 0; sample.forEach(r => { const v = r[c]; if (v != null && String(v).trim() && !/^[\d.,€$£%\s-]+$/.test(String(v))) n++; }); if (n > bn) { bn = n; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.desc = bc; }
+    // description column: real text, never the size column (a number + ml/l/g)
+    { const byText = pickDescCol(sample, ncol, [cols.ean, cols.qty, ...(cols.prices || [])]);
+      if (cols.desc < 0) cols.desc = byText;
+      else if (byText >= 0 && byText !== cols.desc && colIsMostlySize(sample, cols.desc)) cols.desc = byText; }
     for (let r = dataStart; r < rows.length; r++) {
       const row = rows[r] || []; const code = eanCanon(row[cols.ean]);
       if (!code || (code.length !== 13 && code.length !== 8)) continue;

@@ -18,10 +18,32 @@ key a caller passes is ignored and never stored. There is no raw_row.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 
 from . import money, repo
+
+# A size is a number followed by a unit (100 ml, 15 Gr, 200ml, "20 ml + Stick 2 g"); a product
+# description is mainly text. Mirrors the frontend's looksSize/isTexty so a description that slipped
+# in as a size can be corrected on the next upload. See frontend/app.js.
+_SIZE_UNITS = re.compile(
+    r"(?<![a-zà-ÿ])(ml|cl|dl|mg|kg|grs|gr|oz|lb|pcs|pces|pce|pc|caps|cap|tabs|tab|sticks|stick|"
+    r"st|pz|pezzi|pieces?|pièces?|stuck|stück|unidades?|un|g|l|u|x)(?![a-zà-ÿ])", re.IGNORECASE)
+
+
+def looks_size(v: str | None) -> bool:
+    s = (v or "").strip()
+    if not s or not re.search(r"\d", s):
+        return False
+    rest = _SIZE_UNITS.sub(" ", s.lower())
+    rest = re.sub(r"[\d.,+x×*/&()\[\]\s-]", "", rest)
+    return rest == ""
+
+
+def is_texty(v: str | None) -> bool:
+    s = (v or "").strip()
+    return bool(s) and not looks_size(s) and bool(re.search(r"[A-Za-zÀ-ÿ]{3,}", s))
 
 
 @dataclass
@@ -66,6 +88,14 @@ def _lowest_price(row: dict) -> Decimal | None:
         if d.is_finite() and d > 0:
             candidates.append(d)
     return min(candidates) if candidates else None
+
+
+def _backfill_description(conn, ean: str, existing, incoming: str | None) -> None:
+    """Correct a product's description on re-import ONLY when the stored one is missing or is a
+    size value (a number + ml/l/g) and the new row carries real text. Never overwrites a good name."""
+    cur = existing["description"]
+    if is_texty(incoming) and (not (cur or "").strip() or looks_size(cur)):
+        repo.update_product(conn, ean, description=incoming)
 
 
 def import_rows(conn, batch_id: int, rows: list[dict], *,
@@ -120,6 +150,7 @@ def import_rows(conn, batch_id: int, rows: list[dict], *,
                 pid = int(existing["product_id"])
                 if row_brand_id is not None and existing["brand_id"] is None:
                     repo.assign_brand(conn, pid, row_brand_id)   # fill a missing brand from the file
+                _backfill_description(conn, ean, existing, row.get("description"))
             elif row_brand_id is not None:
                 pid = repo.create_product(conn, ean, description=row.get("description"),
                                           brand_id=row_brand_id, status="active",
@@ -144,6 +175,7 @@ def import_rows(conn, batch_id: int, rows: list[dict], *,
             pid = int(existing["product_id"])
             if brand_id is not None and existing_brand is None:
                 repo.assign_brand(conn, pid, brand_id)   # fill a missing brand, never overwrite
+            _backfill_description(conn, ean, existing, row.get("description"))
         else:
             status = "active" if brand_id is not None else "needs_review"
             pid = repo.create_product(conn, ean, description=row.get("description"),
