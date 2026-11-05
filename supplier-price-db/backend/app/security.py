@@ -33,6 +33,9 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Opener-Policy": "same-origin",
+    # Always revalidate: the SPA assets update often; ETag still makes an unchanged file a cheap
+    # 304, but a normal refresh now picks up new code (no more stale app.js needing a hard refresh).
+    "Cache-Control": "no-cache",
 }
 
 

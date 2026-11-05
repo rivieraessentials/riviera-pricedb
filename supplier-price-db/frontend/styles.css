@@ -134,3 +134,10 @@ textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-bg)}
 #dropveil{position:fixed;inset:0;background:rgba(37,99,201,.1);border:3px dashed var(--blue);z-index:900;display:none;align-items:center;justify-content:center;font-size:19px;color:var(--blue);font-weight:700}
 #dropveil.on{display:flex}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.combo{position:relative}
+.combo input{width:100%}
+.combo-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 3px);z-index:50;background:var(--bg);border:1px solid var(--border2);border-radius:10px;box-shadow:var(--shadow-lg);max-height:240px;overflow:auto}
+.combo-item{padding:8px 11px;cursor:pointer;font-size:12.5px;border-bottom:1px solid var(--border)}
+.combo-item:last-child{border-bottom:none}
+.combo-item:hover{background:var(--blue-bg);color:var(--blue)}
+.combo-empty{padding:9px 11px;font-size:11px;color:var(--text2);line-height:1.4}

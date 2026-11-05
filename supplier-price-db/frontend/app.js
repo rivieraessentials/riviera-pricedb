@@ -149,6 +149,7 @@ let _gridRows = {}, _curCols = [];
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
 const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [], currencies: ["EUR"] };
 let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null;
+const _comboOptions = {};   // {inputId: [names]} for the searchable comboboxes
 
 function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (11 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (5 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(102 * gridZoom) + "px"); r.setProperty("--prod-w", Math.round(170 * gridZoom) + "px"); }
 function setZoom(d) { gridZoom = Math.min(1.5, Math.max(0.6, Math.round((gridZoom + d * 0.1) * 10) / 10)); try { localStorage.setItem("pdbZoom", gridZoom); } catch (e) {} applyZoom(); render(); }
@@ -317,8 +318,9 @@ VIEWS.bestsellers = async function (c) {
 VIEWS.requests = async function (c) {
   const reqs = await apiGet("/requests");
   const custOpts = store.customers.map(cu => `<option value="${esc(cu)}">`).join("");
-  const knownBrands = [...new Set([...brandList().map(b => b.name), ...reqs.map(r => r.brand).filter(Boolean)])];
-  const brandOpts = knownBrands.map(b => `<option value="${esc(b)}">`).join("");
+  const knownBrands = [...new Set([...brandList().map(b => b.name), ...reqs.map(r => r.brand).filter(Boolean)])]
+    .sort((a, b) => a.localeCompare(b));
+  _comboOptions["req-brand"] = knownBrands;
   const custs = [...new Set(reqs.map(r => r.customer).filter(Boolean))];
 
   let hist = "";
@@ -352,7 +354,7 @@ VIEWS.requests = async function (c) {
     <div class="card"><div class="card-title">New request <button class="sm" style="margin-left:auto" data-act="reqfile">⬆ Upload Excel</button></div>
       <div class="grid2" style="margin-bottom:12px">
         <div><div class="fl">Customer company <span class="muted">(optional)</span></div><input id="req-cust" list="custlist" placeholder="company name"/><datalist id="custlist">${custOpts}</datalist></div>
-        <div><div class="fl">Brand <span class="muted">(optional)</span></div><input id="req-brand" list="reqbrandlist" placeholder="— any —"/><datalist id="reqbrandlist">${brandOpts}</datalist></div>
+        <div><div class="fl">Brand <span class="muted">(optional — type to search, or enter a new one)</span></div>${comboField("req-brand", "— any — type to search or add a brand", "")}</div>
         <div><div class="fl">Request date</div><input id="req-date" type="date" value="${esc(today())}"/></div>
         <div><div class="fl">Min margin %</div><input id="margin" type="number" value="7" step="0.5"/></div>
         <div><div class="fl">Target currency</div><select id="req-cur">${store.currencies.map(cu => `<option>${esc(cu)}</option>`).join("")}</select></div></div>
@@ -427,6 +429,24 @@ VIEWS.settings = async function (c) {
     <a href="/export" download><button class="success">⤓ Download database + CSV bundle</button></a></div>`;
   c.innerHTML = h;
 };
+
+// ---------- searchable combobox (type to filter, click to pick, or type a new value) ----------
+function comboField(id, placeholder, value) {
+  return `<div class="combo" data-combo="${id}">
+    <input id="${id}" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(value || "")}" data-act="comboinput"/>
+    <div class="combo-menu" id="${id}-menu"></div></div>`;
+}
+function openCombo(input) {
+  const menu = document.getElementById(input.id + "-menu");
+  if (!menu) return;
+  const q = (input.value || "").trim().toLowerCase();
+  const opts = (_comboOptions[input.id] || []).filter(n => !q || n.toLowerCase().includes(q));
+  menu.innerHTML = opts.slice(0, 100).map(n =>
+      `<div class="combo-item" data-act="comboitem" data-target="${input.id}" data-val="${esc(n)}">${esc(n)}</div>`).join("")
+    || `<div class="combo-empty">No brand matches${input.value.trim() ? ` — “${esc(input.value.trim())}” will be used as typed` : ""}.</div>`;
+  menu.style.display = "block";
+}
+function closeCombos() { document.querySelectorAll(".combo-menu").forEach(m => { m.style.display = "none"; }); }
 
 // ---------- modals + toast ----------
 function openModal(html) { document.getElementById("modalbox").innerHTML = html; document.getElementById("modal").classList.add("on"); }
@@ -762,9 +782,12 @@ document.getElementById("cur").addEventListener("change", e => { display = e.tar
 document.getElementById("modal").addEventListener("click", e => { if (e.target.id === "modal") { if (_brandApproveResolve) { const r = _brandApproveResolve; _brandApproveResolve = null; r(null); } if (_importGuardResolve) { const r = _importGuardResolve; _importGuardResolve = null; r(false); } closeModal(); } });
 
 document.addEventListener("click", e => {
+  if (!e.target.closest(".combo")) closeCombos();   // click outside any combobox closes its menu
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, bid = el.dataset.bid, ean = el.dataset.ean, id = el.dataset.id;
   switch (act) {
+    case "comboinput": openCombo(el); break;
+    case "comboitem": { const inp = document.getElementById(el.dataset.target); if (inp) inp.value = el.dataset.val; const m = document.getElementById(el.dataset.target + "-menu"); if (m) m.style.display = "none"; break; }
     case "brand": activeBrand = el.dataset.brand; sortCol = null; cmpA = cmpB = ""; curFilter = "all"; if (activeBrand !== "__unknown__") brandLetter = letterOf(activeBrand); render(); break;
     case "brandletter": brandLetter = el.dataset.letter; render(); break;
     case "bsbrand": bsBrand = el.dataset.brand; render(); break;
@@ -806,6 +829,14 @@ document.addEventListener("click", e => {
 document.addEventListener("input", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   if (el.dataset.act === "search") { searchQ = el.value; queueFocus("offSearch"); render(); }
+  else if (el.dataset.act === "comboinput") { openCombo(el); }
+});
+document.addEventListener("focusin", e => {
+  const t = e.target; if (t && t.dataset && t.dataset.act === "comboinput") openCombo(t);
+});
+document.addEventListener("keydown", e => {
+  const t = e.target; if (!t || !t.dataset || t.dataset.act !== "comboinput") return;
+  if (e.key === "Escape" || e.key === "Enter") { const m = document.getElementById(t.id + "-menu"); if (m) m.style.display = "none"; if (e.key === "Enter") e.preventDefault(); }
 });
 document.addEventListener("change", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
