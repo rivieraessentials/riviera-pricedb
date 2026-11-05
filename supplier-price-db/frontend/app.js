@@ -673,12 +673,13 @@ async function doImport() {
     let sid = (store.suppliers.find(s => s.name.toLowerCase() === sup.toLowerCase()) || {}).supplier_id;
     if (!sid) { sid = (await api("POST", "/suppliers", { name: sup })).supplier_id; }
     const rate = currency === "EUR" ? "1" : (store.fx.rates || {})[currency] || null;
+    const noRate = currency !== "EUR" && !rate;   // non-EUR currency with no FX rate yet
     const sha = await sha256Hex(_pendingBytes);
     const batch = await api("POST", "/batches", {
       supplier_id: sid, currency, received_date: meta.received_date, territory: meta.territory,
       kind, brand: multibrand ? "(multi-brand)" : singleBrand, moq: meta.moq, lead_time: meta.lead_time,
       notes: meta.notes, source_file: _pendingFile ? _pendingFile.name : null, source_sha256: sha,
-      fx_rate_eur: rate, fx_source: "import", fx_locked: currency === "EUR" ? 0 : 1,
+      fx_rate_eur: rate, fx_source: "import", fx_locked: 0,
     });
     if (batch.warning) toast("Note: " + batch.warning);
     const offers = parsed.rows.map(r => {
@@ -694,7 +695,8 @@ async function doImport() {
     setActiveNav("rankings"); render();
     const nrev = (res.review || []).length;
     const revNote = nrev ? "\n• " + nrev + " row(s) need attention" + (multibrand ? " — unmatched EANs are in the ❓ Unknown brands tab + Review" : " (Review)") : "";
-    toast(`Imported ${offers.length} rows from ${_pendingFile ? _pendingFile.name : "file"}\n• ${res.offer_ids.length} offers added${revNote}${parsed.bad ? "\n• " + parsed.bad + " rows skipped (no EAN or price)" : ""}`);
+    const fxNote = noRate ? `\n• ⚠ ${currency} prices stay hidden until you add a ${currency} rate in Currency & FX (then they appear automatically)` : "";
+    toast(`Imported ${offers.length} rows from ${_pendingFile ? _pendingFile.name : "file"}\n• ${res.offer_ids.length} offers added${revNote}${fxNote}${parsed.bad ? "\n• " + parsed.bad + " rows skipped (no EAN or price)" : ""}`);
   } catch (e) { toast("Import failed: " + e.message); }
 }
 

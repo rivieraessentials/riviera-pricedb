@@ -148,6 +148,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(400, detail="rate must be a positive decimal (1 EUR = rate * currency)")
         with get_conn() as conn:
             repo.set_fx_rate(conn, body.rate_date, body.currency.upper(), body.rate.strip(), "manual")
+            repo.rebuild_current_best(conn)   # a new rate lets no-rate batches convert — refresh cache
             rows = conn.execute("SELECT currency, rate FROM fx_rates WHERE rate_date = ?",
                                 (body.rate_date,)).fetchall()
             return FxRatesOut(rate_date=body.rate_date, rates={r["currency"]: r["rate"] for r in rows})
@@ -159,6 +160,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 rdate, n, source = fx.update_fx_rates(conn, cfg.fx)
             except Exception as exc:
                 raise HTTPException(502, detail=f"FX fetch failed: {exc}")
+            repo.rebuild_current_best(conn)   # newly fetched rates let no-rate batches convert
             return FxRefreshOut(rate_date=rdate, written=n, source=source)
 
     # ---- offline download bundle (3-2-1 copy, design §6): SQLite snapshot + CSV exports ----

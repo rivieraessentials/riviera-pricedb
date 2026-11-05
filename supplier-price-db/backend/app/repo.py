@@ -192,11 +192,27 @@ class OfferView:
     created_at: str
 
 
-def _rate_for(currency: str | None, fx_rate_eur: str | None) -> str | None:
-    """Rate to use for EUR conversion: the batch's rate, or '1' for EUR."""
+def effective_rate(conn: sqlite3.Connection, currency: str | None, fx_rate_eur: str | None,
+                   received_date: str | None = None) -> str | None:
+    """Rate to convert a batch's prices to EUR (design O4 §4.2).
+
+    The batch's own rate wins when set (a locked per-batch override, or the import-date rate).
+    EUR is always 1. Otherwise FALL BACK to the daily `fx_rates` for that currency — the rate
+    effective on/before the batch's date, else the most recent — so a rate added later makes a
+    batch that was imported without one convert, with no re-import. None only when no rate exists
+    anywhere yet (prices then can't be shown in EUR until a rate is added)."""
     if fx_rate_eur is not None:
         return fx_rate_eur
-    return "1" if (currency or "").upper() == "EUR" else None
+    cur = (currency or "").upper()
+    if cur == "EUR":
+        return "1"
+    row = conn.execute(
+        "SELECT rate FROM fx_rates WHERE currency = ? AND rate_date <= ? ORDER BY rate_date DESC LIMIT 1",
+        (cur, received_date or "9999-12-31")).fetchone()
+    if row is None:
+        row = conn.execute(
+            "SELECT rate FROM fx_rates WHERE currency = ? ORDER BY rate_date DESC LIMIT 1", (cur,)).fetchone()
+    return row["rate"] if row else None
 
 
 def product_offer_history(conn: sqlite3.Connection, product_id: int) -> list[OfferView]:
@@ -210,7 +226,7 @@ def product_offer_history(conn: sqlite3.Connection, product_id: int) -> list[Off
     ).fetchall()
     views: list[OfferView] = []
     for r in rows:
-        rate = _rate_for(r["b_currency"], r["b_fx"])
+        rate = effective_rate(conn, r["b_currency"], r["b_fx"], r["b_received"])
         price_eur = money.price_to_eur(r["price_original"], rate) if rate else Decimal("NaN")
         unit = money.unit_price_eur(r["price_original"], rate) if rate else Decimal("NaN")
         views.append(OfferView(

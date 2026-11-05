@@ -122,6 +122,23 @@ def test_unknown_brand_tab_then_resolved_by_later_branded_offer(client):
     assert not any(r["ean"] == ean for r in client.get("/grid", params={"unknown": "true"}).json()["rows"])
 
 
+def test_usd_offer_without_rate_appears_once_rate_added(client):
+    s = _supplier(client, "PassionCo")
+    ean = make_ean("500000000155")
+    b = client.post("/batches", json={"supplier_id": s, "currency": "USD", "kind": "price_list",
+                                      "brand": "Color WOW", "fx_rate_eur": None, "fx_locked": 0}).json()
+    client.post("/offers", json={"batch_id": b["batch_id"], "brand_mode": "single", "brand": "Color WOW",
+                                 "offers": [{"ean": ean, "quoted_price": "12.00"}]})
+    # no USD rate yet: the product exists but has no EUR price and no column in the grid
+    g = client.get("/grid", params={"brand": "Color WOW"}).json()
+    assert [r for r in g["rows"] if r["ean"] == ean][0]["best_eur"] is None and len(g["batches"]) == 0
+    # add a USD rate -> the batch converts via the daily-rate fallback, no re-import
+    client.post("/fx/rates", json={"rate_date": "2026-11-05", "currency": "USD", "rate": "1.25"})
+    g2 = client.get("/grid", params={"brand": "Color WOW"}).json()
+    row = [r for r in g2["rows"] if r["ean"] == ean][0]
+    assert row["best_eur"] == "9.60" and len(g2["batches"]) == 1   # 12.00 USD / 1.25 = 9.60 EUR
+
+
 def test_currencies_offers_eur_and_usd(client):
     cur = client.get("/currencies").json()["currencies"]
     assert cur[0] == "EUR" and "USD" in cur          # configured symbols are offerable at import
