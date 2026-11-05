@@ -218,6 +218,22 @@ def test_request_without_target_lists_suppliers_cheapest_first(client):
     assert again["results"][0]["suppliers"][0] == {"supplier": "Gamma", "unit_price_eur": "5.00"}
 
 
+def test_request_shows_submitted_description_for_unknown_ean(client):
+    # an EAN not in the DB keeps the description sent with the request line, and it survives a reload
+    ean = make_ean("500000000308")
+    req = client.post("/requests", json={
+        "lines": [{"ean": ean, "description": "Filorga NCEF-Shot 15ml"}]}).json()
+    line = req["results"][0]
+    assert line["status"] == "unknown" and line["description"] == "Filorga NCEF-Shot 15ml"
+    again = client.get(f"/requests/{req['request_id']}").json()
+    assert again["results"][0]["description"] == "Filorga NCEF-Shot 15ml"
+    # once the EAN becomes a real product, the DB description wins
+    s1 = _supplier(client, "Alpha"); _import(client, s1, "Wella", ean, "9.00")
+    after = client.get(f"/requests/{req['request_id']}").json()
+    assert after["results"][0]["status"] == "ok"
+    assert after["results"][0]["description"] == "Prod " + ean
+
+
 def test_request_no_supplier_meets_margin(client):
     s1 = _supplier(client, "Alpha")
     ean = make_ean("500000000094")

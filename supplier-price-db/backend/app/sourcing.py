@@ -10,7 +10,9 @@ Per line, against a minimum margin m (a decimal fraction, e.g. 0.07 for 7%):
   * ok       — the cheapest live supplier meets the margin: buy_eur <= target_eur * (1 - m);
   * no       — the product exists but no live supplier meets the margin (covers "no live
                offer at all" and "a rate is needed to compare a non-EUR target").
-The product description shown comes from the database, never from the request.
+The product description shown is the database one when the product exists; otherwise (an EAN not
+yet in the database) the description submitted with the request line is shown, so an EAN-only
+request still names what was asked for.
 """
 from __future__ import annotations
 
@@ -59,15 +61,16 @@ def compute(conn, lines: list[dict], margin) -> dict:
         has_target = tp is not None
         target_minor = int(tp) if has_target else 0
         currency = (ln.get("currency") or "EUR").upper()
+        req_desc = (ln.get("description") or "").strip() or None
         prod = repo.get_product_by_ean(conn, ean)
         if prod is None:
             unknown += 1
-            results.append({"ean": ean, "description": None, "status": "unknown",
+            results.append({"ean": ean, "description": req_desc, "status": "unknown",
                             "target_eur": None, "supplier": None, "buy_eur": None,
                             "margin_pct": None, "currency": currency, "suppliers": []})
             continue
 
-        desc = prod["description"]
+        desc = prod["description"] or req_desc
         target_eur = _target_eur(target_minor, currency, rates) if has_target else None
         # every live supplier for this EAN, cheapest first (the overview the owner wants)
         sups = repo.live_supplier_prices(conn, int(prod["product_id"]))

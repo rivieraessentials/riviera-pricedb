@@ -399,7 +399,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         lines = repo.request_lines(conn, int(req["request_id"]))
         computed = sourcing.compute(
             conn,
-            [{"ean": ln["ean"], "target_price": ln["target_price"], "currency": ln["currency"]}
+            [{"ean": ln["ean"], "target_price": ln["target_price"], "currency": ln["currency"],
+              "description": ln["description"]}
              for ln in lines],
             req["margin"])
         return {
@@ -425,8 +426,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 tp = None                                  # no target -> supply overview
             else:
                 tp = money.import_price_minor(validate.price_or_400(ln.target_price, "target_price"))
+            desc = validate.text_or_400(ln.description, "description") if ln.description else None
             clean.append({"ean": e, "target_price": tp,
-                          "currency": (ln.currency or "EUR").upper()})
+                          "currency": (ln.currency or "EUR").upper(), "description": desc})
         with get_conn() as conn:
             rid = repo.create_request(conn, customer=customer, brand=brand,
                                       request_date=body.request_date, margin=str(margin),

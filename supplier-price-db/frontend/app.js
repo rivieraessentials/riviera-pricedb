@@ -157,11 +157,14 @@ function parseRequestWorkbook(buf) {
     const ncol = Math.max(0, ...rows.slice(hi, hi + 60).map(r => r ? r.length : 0));
     if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let nn = 0; sample.forEach(r => { if (looksEan(r[c])) nn++; }); if (nn > bn) { bn = nn; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
     if (cols.ean < 0) return;
+    // description column: the detected one, else the widest non-numeric, non-EAN, non-price column
+    if (cols.desc < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { if (c === cols.ean || (cols.prices || []).includes(c)) continue; let n = 0; sample.forEach(r => { const v = r[c]; if (v != null && String(v).trim() && !/^[\d.,€$£%\s-]+$/.test(String(v))) n++; }); if (n > bn) { bn = n; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.desc = bc; }
     for (let r = dataStart; r < rows.length; r++) {
       const row = rows[r] || []; const code = eanCanon(row[cols.ean]);
       if (!code || (code.length !== 13 && code.length !== 8)) continue;
       const ps = (cols.prices || []).map(i => toNum(row[i])).filter(v => v != null && v > 0);
-      out.push({ ean: code, target: ps.length ? Math.round(Math.min(...ps) * 100) / 100 : null });
+      const desc = cols.desc >= 0 && row[cols.desc] != null ? String(row[cols.desc]).trim() : "";
+      out.push({ ean: code, target: ps.length ? Math.round(Math.min(...ps) * 100) / 100 : null, desc });
     }
   });
   return out;
@@ -170,6 +173,7 @@ function parseRequestWorkbook(buf) {
 // ---------- state + store ----------
 let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null;
 let sortCol = null, sortDir = 1, searchQ = "", terrFilter = "all", curFilter = "all", cmpA = "", cmpB = "";
+let reqDescriptions = {};   // EAN -> description from the last uploaded request file (not persisted client-side)
 let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
 const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
 let _gridRows = {}, _curCols = [];
@@ -597,7 +601,10 @@ async function runSourcing() {
   const lines = [];
   document.getElementById("reqin").value.split("\n").map(l => l.trim()).filter(Boolean).forEach(l => {
     const { ean, target } = parseReqLine(l);
-    if (ean) lines.push(target != null ? { ean, target_price: String(target), currency } : { ean, currency });
+    if (!ean) return;
+    const line = target != null ? { ean, target_price: String(target), currency } : { ean, currency };
+    if (reqDescriptions[ean]) line.description = reqDescriptions[ean];
+    lines.push(line);
   });
   if (!lines.length) { toast("No valid EAN lines found."); return; }
   try {
@@ -812,6 +819,7 @@ function startRequestUpload(f) {
     try {
       const rows = parseRequestWorkbook(new Uint8Array(buf));
       if (!rows.length) { toast("No EANs found in that file."); return; }
+      reqDescriptions = {}; rows.forEach(r => { if (r.desc) reqDescriptions[r.ean] = r.desc; });
       const out = rows.map(r => r.target != null ? (r.ean + "\t" + r.target) : r.ean);
       const noTarget = rows.filter(r => r.target == null).length;
       view = "requests"; setActiveNav("requests"); render().then(() => {

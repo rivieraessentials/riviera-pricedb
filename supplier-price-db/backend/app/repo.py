@@ -605,11 +605,12 @@ def create_request(conn: sqlite3.Connection, *, customer: str | None, brand: str
         rid = int(cur.lastrowid)
         for ln in lines:
             tp = ln.get("target_price")
+            desc = (ln.get("description") or "").strip() or None
             conn.execute(
-                "INSERT INTO request_lines (request_id, ean, target_price, currency) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO request_lines (request_id, ean, target_price, currency, description) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (rid, str(ln["ean"]), int(tp) if tp is not None else None,
-                 (ln.get("currency") or "EUR").upper()))
+                 (ln.get("currency") or "EUR").upper(), desc))
         conn.execute("COMMIT")
         return rid
     except Exception:

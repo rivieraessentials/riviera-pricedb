@@ -135,6 +135,7 @@ class RequestLineIn(BaseModel):
     ean: str
     target_price: str | None = None        # exact decimal string; None = no target (supply overview)
     currency: str = "EUR"
+    description: str | None = None         # product text from the request; shown when the EAN is unknown
 
 
 class RequestCreate(BaseModel):
