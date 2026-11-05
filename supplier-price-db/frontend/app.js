@@ -352,7 +352,7 @@ function toolbarHTML(currencies) {
       currencies.map(c => `<button class="${curFilter === c ? "on" : ""}" data-act="curf" data-cur="${esc(c)}">${esc(c)}</button>`).join("") + "</span>"
     : "";
   return `<div class="toolbar" style="justify-content:center">
-    <button class="primary" data-act="addfile">⬆ Add file</button>
+    <button class="primary" data-act="addfile" data-drop="offer" title="click, or drag an .xlsx onto this button">⬆ Add file <span class="muted" style="font-weight:400;font-size:11px">or drop here</span></button>
     <button data-act="addline">＋ Add line</button>
     <input id="offSearch" placeholder="🔍 search EAN or description…" value="${esc(searchQ)}" style="width:260px" data-act="search"/>
     <span class="seg"><button class="${terrFilter === "all" ? "on" : ""}" data-act="terr" data-terr="all">All</button>
@@ -950,7 +950,10 @@ let _dragN = 0; const veil = document.getElementById("dropveil");
 window.addEventListener("dragenter", e => { e.preventDefault(); _dragN++; veil.classList.add("on"); });
 window.addEventListener("dragover", e => { e.preventDefault(); });
 window.addEventListener("dragleave", e => { _dragN--; if (_dragN <= 0) veil.classList.remove("on"); });
-window.addEventListener("drop", e => { e.preventDefault(); _dragN = 0; veil.classList.remove("on"); const f = [...(e.dataTransfer.files || [])].find(f => /\.xlsx?$/i.test(f.name)); if (f) startOfferImport(f); });
+window.addEventListener("drop", e => { e.preventDefault(); _dragN = 0; veil.classList.remove("on"); dropBtnOff(); const f = [...(e.dataTransfer.files || [])].find(f => /\.xlsx?$/i.test(f.name)); if (f) startOfferImport(f); });
+// highlight the "Add file" button while a file is dragged over it (the window drop above imports it)
+function dropBtnOff() { document.querySelectorAll('[data-drop="offer"].dragon').forEach(b => b.classList.remove("dragon")); }
+window.addEventListener("dragover", e => { const b = e.target.closest && e.target.closest('[data-drop="offer"]'); if (b) b.classList.add("dragon"); else dropBtnOff(); });
 
 // ---------- boot ----------
 (async function init() {

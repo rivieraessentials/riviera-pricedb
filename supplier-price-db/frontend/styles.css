@@ -133,6 +133,7 @@ textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-bg)}
 .drop:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-bg)}
 #dropveil{position:fixed;inset:0;background:rgba(37,99,201,.1);border:3px dashed var(--blue);z-index:900;display:none;align-items:center;justify-content:center;font-size:19px;color:var(--blue);font-weight:700}
 #dropveil.on{display:flex}
+[data-drop="offer"].dragon{outline:3px dashed var(--blue);outline-offset:2px;box-shadow:0 0 0 4px var(--blue-bg)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .combo{position:relative}
 .combo input{width:100%}
