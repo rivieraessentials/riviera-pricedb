@@ -142,7 +142,7 @@ function parseWorkbook(buf) {
 
 // ---------- state + store ----------
 let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null;
-let sortCol = null, sortDir = 1, searchQ = "", terrFilter = "all", cmpA = "", cmpB = "";
+let sortCol = null, sortDir = 1, searchQ = "", terrFilter = "all", curFilter = "all", cmpA = "", cmpB = "";
 let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
 const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
 let _gridRows = {}, _curCols = [];
@@ -196,10 +196,10 @@ VIEWS.rankings = async function (c, _retried) {
     activeBrand = brands.length ? brands[0].name : UNK;
   const unknown = activeBrand === UNK;
   const terr = terrFilter !== "all" ? "&territory=" + terrFilter : "";
+  const ccy = curFilter !== "all" ? "&currency=" + encodeURIComponent(curFilter) : "";
   let data;
   try {
-    data = await apiGet(unknown ? "/grid?unknown=1" + terr
-                                : "/grid?brand=" + encodeURIComponent(activeBrand) + terr);
+    data = await apiGet((unknown ? "/grid?unknown=1" : "/grid?brand=" + encodeURIComponent(activeBrand)) + terr + ccy);
   } catch (e) {
     // the active brand may have disappeared (e.g. the data was reset in another session).
     // refresh the store and fall back to a brand that still exists (or Unknown), then re-render.
@@ -211,11 +211,12 @@ VIEWS.rankings = async function (c, _retried) {
     return VIEWS.rankings(c, true);
   }
   _gridRows = {}; data.rows.forEach(r => { _gridRows[r.ean] = r; });
+  if (curFilter !== "all" && !(data.currencies || []).includes(curFilter)) { curFilter = "all"; return VIEWS.rankings(c, _retried); }
   let bs = data.batches.slice();
   if (colOrder[activeBrand]) { const ord = colOrder[activeBrand]; bs.sort((a, b) => (ord.indexOf(a.batch_id) < 0 ? 999 : ord.indexOf(a.batch_id)) - (ord.indexOf(b.batch_id) < 0 ? 999 : ord.indexOf(b.batch_id))); }
   const showDiff = cmpA && cmpB && bs.some(b => b.batch_id == cmpA) && bs.some(b => b.batch_id == cmpB);
 
-  let h = toolbarHTML();
+  let h = toolbarHTML(data.currencies || []);
   // Compact A–Z index: a letter bar, expanding into that letter's brands when clicked.
   const letters = [...new Set(brands.map(b => letterOf(b.name)))].sort();
   if (!unknown && activeBrand && brandLetter === null) brandLetter = letterOf(activeBrand);
@@ -266,7 +267,10 @@ VIEWS.rankings = async function (c, _retried) {
     if (!showDiff) h += `<td class="best-euro">${best != null ? fmt(best) : "—"}</td>`;
     cols.forEach(b => { const v = priceOf(p, b.batch_id); const tag = b.batch_id == cmpA ? " colA" : b.batch_id == cmpB ? " colB" : "";
       if (v == null) { h += `<td class="pricecell${tag}"><span class="dlt">—</span></td>`; return; }
-      h += `<td class="pricecell ${(b.batch_id == p.best_batch_id && !showDiff) ? "best" : ""}${tag}">${fmt(v)}</td>`; });
+      const o = p.orig ? p.orig[b.batch_id] : null;
+      const origLine = (o != null && b.currency && b.currency !== "EUR")
+        ? `<div class="muted" style="font-weight:400">${esc(sym(b.currency))}${(parseFloat(o)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : "";
+      h += `<td class="pricecell ${(b.batch_id == p.best_batch_id && !showDiff) ? "best" : ""}${tag}">${fmt(v)}${origLine}</td>`; });
     if (showDiff) { const a = priceOf(p, cmpA), b = priceOf(p, cmpB);
       if (a != null && b != null && a > 0) { const pct = (b - a) / a * 100; h += `<td class="diffcell ${pct > 0 ? "up" : "dn"}">${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</td>`; }
       else h += '<td class="diffcell"><span class="dlt">—</span></td>'; }
@@ -274,7 +278,13 @@ VIEWS.rankings = async function (c, _retried) {
   });
   h += "</tbody></table></div>"; c.innerHTML = h;
 };
-function toolbarHTML() {
+function toolbarHTML(currencies) {
+  currencies = currencies || [];
+  const showCcy = currencies.length && !(currencies.length === 1 && currencies[0] === "EUR");
+  const ccySeg = showCcy
+    ? `<span class="seg" title="filter by currency"><button class="${curFilter === "all" ? "on" : ""}" data-act="curf" data-cur="all">All ccy</button>` +
+      currencies.map(c => `<button class="${curFilter === c ? "on" : ""}" data-act="curf" data-cur="${esc(c)}">${esc(c)}</button>`).join("") + "</span>"
+    : "";
   return `<div class="toolbar" style="justify-content:center">
     <button class="primary" data-act="addfile">⬆ Add file</button>
     <button data-act="addline">＋ Add line</button>
@@ -282,6 +292,7 @@ function toolbarHTML() {
     <span class="seg"><button class="${terrFilter === "all" ? "on" : ""}" data-act="terr" data-terr="all">All</button>
       <button class="${terrFilter === "T2" ? "on" : ""}" data-act="terr" data-terr="T2">T2</button>
       <button class="${terrFilter === "T1" ? "on" : ""}" data-act="terr" data-terr="T1">T1</button></span>
+    ${ccySeg}
     <span class="seg" title="zoom the table"><button data-act="zoom" data-dir="-1">A−</button><button data-act="zoom" data-dir="1">A+</button></span></div>`;
 }
 function wireNothing() {}
@@ -754,10 +765,11 @@ document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, bid = el.dataset.bid, ean = el.dataset.ean, id = el.dataset.id;
   switch (act) {
-    case "brand": activeBrand = el.dataset.brand; sortCol = null; cmpA = cmpB = ""; if (activeBrand !== "__unknown__") brandLetter = letterOf(activeBrand); render(); break;
+    case "brand": activeBrand = el.dataset.brand; sortCol = null; cmpA = cmpB = ""; curFilter = "all"; if (activeBrand !== "__unknown__") brandLetter = letterOf(activeBrand); render(); break;
     case "brandletter": brandLetter = el.dataset.letter; render(); break;
     case "bsbrand": bsBrand = el.dataset.brand; render(); break;
-    case "terr": terrFilter = el.dataset.terr; render(); break;
+    case "terr": terrFilter = el.dataset.terr; curFilter = "all"; render(); break;
+    case "curf": curFilter = el.dataset.cur; render(); break;
     case "zoom": setZoom(parseInt(el.dataset.dir, 10)); break;
     case "sort": setSort(el.dataset.col); break;
     case "cmp": toggleCmp(bid); break;

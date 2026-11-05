@@ -475,11 +475,14 @@ def delete_batch(conn: sqlite3.Connection, batch_id: int) -> list[int]:
     return touched
 
 
-def brand_grid(conn: sqlite3.Connection, brand_id: int | None,
-              territory: str | None = None) -> tuple[list[dict], list[dict]]:
+def brand_grid(conn: sqlite3.Connection, brand_id: int | None, territory: str | None = None,
+              currency: str | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """The Offers grid for one brand: LIVE offer columns (the replacement rule, §3.3) and a row
-    per product with that supplier's live per-piece EUR price. 'Best' is the cheapest shown cell.
-    Superseded and ended offers are not columns here (they remain in each product's history).
+    per product with each supplier's live per-piece price in EUR and in its own currency. 'Best'
+    is the cheapest shown cell (EUR). Superseded/ended offers are not columns (they stay in
+    history). Optional territory and currency filters narrow the columns (and the 'best').
+    Returns (batches, rows, available_currencies) — the currencies present under the territory
+    filter, so the UI can offer a currency filter.
 
     brand_id=None is the **Unknown brands** tab: products not yet assigned a brand (e.g. the
     not-yet-matched rows of a multi-brand upload). They stay here until a branded offer for the
@@ -494,45 +497,54 @@ def brand_grid(conn: sqlite3.Connection, brand_id: int | None,
             "SELECT product_id, ean, description, is_bestseller FROM products "
             "WHERE brand_id = ? ORDER BY description COLLATE NOCASE", (brand_id,)).fetchall()
 
+    cur_filter = currency if currency not in (None, "all") else None
     batch_meta: dict[int, dict] = {}
+    skip_territory: set[int] = set()
+    available: set[str] = set()
     rows: list[dict] = []
     for p in prods:
         pid = int(p["product_id"])
         live = set(live_offer_ids(conn, pid))
         prices: dict[int, str] = {}
+        orig: dict[int, str] = {}
         best: Decimal | None = None
         best_bid: int | None = None
         for v in product_offer_history(conn, pid):
-            if v.offer_id not in live:
-                continue
-            if v.unit_price_eur != v.unit_price_eur:      # NaN -> no rate
+            if v.offer_id not in live or v.unit_price_eur != v.unit_price_eur:   # not live / no rate
                 continue
             bid = v.batch_id
+            if bid in skip_territory:
+                continue
             if bid not in batch_meta:
                 b = conn.execute(
                     "SELECT b.*, s.name AS supplier_name FROM offer_batches b "
                     "JOIN suppliers s ON s.supplier_id = b.supplier_id WHERE b.batch_id = ?",
                     (bid,)).fetchone()
                 if territory not in (None, "all") and (b["territory"] or "") != territory:
-                    continue                              # filtered-out column: skip this cell too
+                    skip_territory.add(bid)               # column filtered out by territory
+                    continue
                 batch_meta[bid] = {
                     "batch_id": bid, "supplier": b["supplier_name"], "supplier_id": b["supplier_id"],
                     "received_date": b["received_date"], "kind": b["kind"],
-                    "territory": b["territory"], "ended_at": b["ended_at"]}
-            elif territory not in (None, "all") and batch_meta[bid]["territory"] != territory:
-                continue
+                    "territory": b["territory"], "ended_at": b["ended_at"], "currency": v.currency}
+            available.add((v.currency or "EUR").upper())   # present under the territory filter
+            if cur_filter and (v.currency or "EUR").upper() != cur_filter:
+                continue                                   # filtered out by currency
             prices[bid] = str(v.unit_price_eur.quantize(money.CENT))
+            orig[bid] = str(v.price_original.quantize(money.CENT))
             if best is None or v.unit_price_eur < best:
                 best, best_bid = v.unit_price_eur, bid
         rows.append({"ean": p["ean"], "description": p["description"],
                      "is_bestseller": bool(p["is_bestseller"]),
-                     "prices": prices,
+                     "prices": prices, "orig": orig,
                      "best_eur": str(best.quantize(money.CENT)) if best is not None else None,
                      "best_batch_id": best_bid})
 
-    batches = sorted(batch_meta.values(),
-                     key=lambda b: (b["received_date"] or "", b["batch_id"]), reverse=True)
-    return batches, rows
+    shown = [b for b in batch_meta.values()
+             if not cur_filter or (b["currency"] or "EUR").upper() == cur_filter]
+    batches = sorted(shown, key=lambda b: (b["received_date"] or "", b["batch_id"]), reverse=True)
+    avail = sorted(available, key=lambda c: (c != "EUR", c))   # EUR first
+    return batches, rows, avail
 
 
 def bestsellers(conn: sqlite3.Connection, brand_id: int | None = None) -> list[dict]:

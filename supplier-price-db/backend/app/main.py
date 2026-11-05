@@ -251,11 +251,11 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     # ---- offers grid (live columns only — the replacement rule, §3.3) ----
     @app.get("/grid")
-    def grid(brand: str | None = None, territory: str | None = None, unknown: bool = False,
-             who: Identity = Depends(require_identity)):
+    def grid(brand: str | None = None, territory: str | None = None, currency: str | None = None,
+             unknown: bool = False, who: Identity = Depends(require_identity)):
         with get_conn() as conn:
             if unknown:                       # the Unknown-brands tab (products with no brand yet)
-                batches, rows = repo.brand_grid(conn, None, territory)
+                batches, rows, avail = repo.brand_grid(conn, None, territory, currency)
                 brand_name = None
             else:
                 if not brand:
@@ -263,11 +263,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 brow = repo.get_brand_by_name(conn, brand)
                 if brow is None:
                     raise HTTPException(404, detail=f"no brand named {brand!r}")
-                batches, rows = repo.brand_grid(conn, int(brow["brand_id"]), territory)
+                batches, rows, avail = repo.brand_grid(conn, int(brow["brand_id"]), territory, currency)
                 brand_name = brow["name"]
             for b in batches:
                 b["kind_label"] = offer_types.kind_label(b.get("kind"))
-            return {"brand": brand_name, "unknown": unknown, "batches": batches, "rows": rows}
+            return {"brand": brand_name, "unknown": unknown, "batches": batches, "rows": rows,
+                    "currencies": avail}
 
     # ---- bestsellers (flag + highlight; the dedicated ranking page is deferred) ----
     @app.get("/bestsellers")

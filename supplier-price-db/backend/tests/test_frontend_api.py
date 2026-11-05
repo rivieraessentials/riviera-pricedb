@@ -139,6 +139,24 @@ def test_usd_offer_without_rate_appears_once_rate_added(client):
     assert row["best_eur"] == "9.60" and len(g2["batches"]) == 1   # 12.00 USD / 1.25 = 9.60 EUR
 
 
+def test_grid_currency_filter_and_original_price(client):
+    s_eur = _supplier(client, "EurSup"); s_usd = _supplier(client, "UsdSup")
+    ean = make_ean("500000000162")
+    _import(client, s_eur, "Color WOW", ean, "10.00")                 # EUR offer
+    client.post("/fx/rates", json={"rate_date": "2026-11-05", "currency": "USD", "rate": "1.25"})
+    b = client.post("/batches", json={"supplier_id": s_usd, "currency": "USD", "kind": "price_list",
+                                      "brand": "Color WOW", "fx_rate_eur": None, "fx_locked": 0}).json()
+    client.post("/offers", json={"batch_id": b["batch_id"], "brand_mode": "single", "brand": "Color WOW",
+                                 "offers": [{"ean": ean, "quoted_price": "15.00"}]})
+    g = client.get("/grid", params={"brand": "Color WOW"}).json()
+    assert set(g["currencies"]) == {"EUR", "USD"}                     # both offered -> filter available
+    usd = client.get("/grid", params={"brand": "Color WOW", "currency": "USD"}).json()
+    assert len(usd["batches"]) == 1 and usd["batches"][0]["currency"] == "USD"
+    bid = str(usd["batches"][0]["batch_id"])
+    row = [r for r in usd["rows"] if r["ean"] == ean][0]
+    assert row["orig"][bid] == "15.00" and row["prices"][bid] == "12.00"   # 15 USD /1.25 = 12.00 EUR
+
+
 def test_currencies_offers_eur_and_usd(client):
     cur = client.get("/currencies").json()["currencies"]
     assert cur[0] == "EUR" and "USD" in cur          # configured symbols are offerable at import
