@@ -189,15 +189,27 @@ async function render() {
 }
 
 // ======================= OFFERS =======================
-VIEWS.rankings = async function (c) {
-  const brands = brandList();
+VIEWS.rankings = async function (c, _retried) {
   const UNK = "__unknown__";
+  let brands = brandList();
   if (activeBrand !== UNK && (!activeBrand || !brands.some(b => b.name === activeBrand)))
     activeBrand = brands.length ? brands[0].name : UNK;
   const unknown = activeBrand === UNK;
   const terr = terrFilter !== "all" ? "&territory=" + terrFilter : "";
-  const data = await apiGet(unknown ? "/grid?unknown=1" + terr
-                                    : "/grid?brand=" + encodeURIComponent(activeBrand) + terr);
+  let data;
+  try {
+    data = await apiGet(unknown ? "/grid?unknown=1" + terr
+                                : "/grid?brand=" + encodeURIComponent(activeBrand) + terr);
+  } catch (e) {
+    // the active brand may have disappeared (e.g. the data was reset in another session).
+    // refresh the store and fall back to a brand that still exists (or Unknown), then re-render.
+    if (_retried) throw e;
+    await loadStore();
+    brands = brandList();
+    activeBrand = brands.length ? brands[0].name : UNK;
+    brandLetter = null; cmpA = cmpB = ""; sortCol = null;
+    return VIEWS.rankings(c, true);
+  }
   _gridRows = {}; data.rows.forEach(r => { _gridRows[r.ean] = r; });
   let bs = data.batches.slice();
   if (colOrder[activeBrand]) { const ord = colOrder[activeBrand]; bs.sort((a, b) => (ord.indexOf(a.batch_id) < 0 ? 999 : ord.indexOf(a.batch_id)) - (ord.indexOf(b.batch_id) < 0 ? 999 : ord.indexOf(b.batch_id))); }
