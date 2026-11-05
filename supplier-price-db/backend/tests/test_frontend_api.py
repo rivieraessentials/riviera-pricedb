@@ -202,6 +202,22 @@ def test_request_stores_inputs_and_recomputes_live(client):
     assert client.get("/requests").json() == []
 
 
+def test_request_without_target_lists_suppliers_cheapest_first(client):
+    s1 = _supplier(client, "Alpha"); s2 = _supplier(client, "Beta")
+    ean = make_ean("500000000179")
+    _import(client, s1, "Wella", ean, "9.00")
+    _import(client, s2, "Wella", ean, "6.00")
+    req = client.post("/requests", json={"lines": [{"ean": ean, "currency": "EUR"}]}).json()  # no target
+    assert req["ok"] == 1 and req["count"] == 1
+    line = req["results"][0]
+    assert line["status"] == "ok" and line["target_eur"] is None
+    assert [(x["supplier"], x["unit_price_eur"]) for x in line["suppliers"]] == [("Beta", "6.00"), ("Alpha", "9.00")]
+    # saved + recomputed live: a cheaper supplier later becomes the top of the list
+    s3 = _supplier(client, "Gamma"); _import(client, s3, "Wella", ean, "5.00")
+    again = client.get(f"/requests/{req['request_id']}").json()
+    assert again["results"][0]["suppliers"][0] == {"supplier": "Gamma", "unit_price_eur": "5.00"}
+
+
 def test_request_no_supplier_meets_margin(client):
     s1 = _supplier(client, "Alpha")
     ean = make_ean("500000000094")

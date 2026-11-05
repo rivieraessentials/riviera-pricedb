@@ -421,8 +421,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         clean: list[dict] = []
         for ln in body.lines:
             e = validate.ean_or_400(ln.ean)
-            price = validate.price_or_400(ln.target_price, "target_price")
-            clean.append({"ean": e, "target_price": money.import_price_minor(price),
+            if ln.target_price is None or str(ln.target_price).strip() == "":
+                tp = None                                  # no target -> supply overview
+            else:
+                tp = money.import_price_minor(validate.price_or_400(ln.target_price, "target_price"))
+            clean.append({"ean": e, "target_price": tp,
                           "currency": (ln.currency or "EUR").upper()})
         with get_conn() as conn:
             rid = repo.create_request(conn, customer=customer, brand=brand,

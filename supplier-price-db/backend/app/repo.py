@@ -577,10 +577,25 @@ def bestsellers(conn: sqlite3.Connection, brand_id: int | None = None) -> list[d
 
 # ---------------------------------------------------------------- customer requests (§9)
 
+def live_supplier_prices(conn: sqlite3.Connection, product_id: int) -> list[dict]:
+    """All LIVE suppliers for a product with their per-piece EUR price, cheapest first.
+    Used by the sourcing overview (§9) — 'who can supply this EAN, at what price'."""
+    live = set(live_offer_ids(conn, product_id))
+    out: list[dict] = []
+    for v in product_offer_history(conn, product_id):
+        if v.offer_id not in live or v.unit_price_eur != v.unit_price_eur:   # not live / no rate
+            continue
+        sup = conn.execute("SELECT name FROM suppliers WHERE supplier_id = ?",
+                           (v.supplier_id,)).fetchone()
+        out.append({"supplier": sup["name"] if sup else None, "unit_price_eur": v.unit_price_eur})
+    out.sort(key=lambda o: o["unit_price_eur"])
+    return out
+
+
 def create_request(conn: sqlite3.Connection, *, customer: str | None, brand: str | None,
                   request_date: str | None, margin: str,
                   lines: list[dict]) -> int:
-    """Store a request's INPUTS only (EAN, target minor units, currency). No result is stored."""
+    """Store a request's INPUTS only (EAN, target minor units or None, currency). No result stored."""
     conn.execute("BEGIN")
     try:
         cur = conn.execute(
@@ -589,10 +604,12 @@ def create_request(conn: sqlite3.Connection, *, customer: str | None, brand: str
              request_date, str(margin)))
         rid = int(cur.lastrowid)
         for ln in lines:
+            tp = ln.get("target_price")
             conn.execute(
                 "INSERT INTO request_lines (request_id, ean, target_price, currency) "
                 "VALUES (?, ?, ?, ?)",
-                (rid, str(ln["ean"]), int(ln["target_price"]), (ln.get("currency") or "EUR").upper()))
+                (rid, str(ln["ean"]), int(tp) if tp is not None else None,
+                 (ln.get("currency") or "EUR").upper()))
         conn.execute("COMMIT")
         return rid
     except Exception:

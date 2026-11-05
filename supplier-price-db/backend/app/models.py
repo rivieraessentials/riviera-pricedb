@@ -133,7 +133,7 @@ class BestsellerSet(BaseModel):
 
 class RequestLineIn(BaseModel):
     ean: str
-    target_price: str                      # exact decimal string, the target's own currency
+    target_price: str | None = None        # exact decimal string; None = no target (supply overview)
     currency: str = "EUR"
 
 

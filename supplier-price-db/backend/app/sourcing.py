@@ -55,38 +55,39 @@ def compute(conn, lines: list[dict], margin) -> dict:
 
     for ln in lines:
         ean = str(ln.get("ean") or "").strip()
-        target_minor = int(ln.get("target_price") or 0)
+        tp = ln.get("target_price")
+        has_target = tp is not None
+        target_minor = int(tp) if has_target else 0
         currency = (ln.get("currency") or "EUR").upper()
         prod = repo.get_product_by_ean(conn, ean)
         if prod is None:
             unknown += 1
             results.append({"ean": ean, "description": None, "status": "unknown",
                             "target_eur": None, "supplier": None, "buy_eur": None,
-                            "margin_pct": None, "currency": currency})
+                            "margin_pct": None, "currency": currency, "suppliers": []})
             continue
 
         desc = prod["description"]
-        target_eur = _target_eur(target_minor, currency, rates)
-        cb = repo.get_current_best(conn, int(prod["product_id"]))
-        buy_eur = money.from_minor(cb["best_unit_price_eur"]) if cb is not None else None
-        supplier = None
-        if cb is not None and cb["best_supplier_id"] is not None:
-            row = conn.execute("SELECT name FROM suppliers WHERE supplier_id = ?",
-                               (cb["best_supplier_id"],)).fetchone()
-            supplier = row["name"] if row else None
+        target_eur = _target_eur(target_minor, currency, rates) if has_target else None
+        # every live supplier for this EAN, cheapest first (the overview the owner wants)
+        sups = repo.live_supplier_prices(conn, int(prod["product_id"]))
+        suppliers_out = [{"supplier": s["supplier"],
+                          "unit_price_eur": str(s["unit_price_eur"].quantize(money.CENT))} for s in sups]
+        best = sups[0] if sups else None
+        buy_eur = best["unit_price_eur"] if best else None
+        supplier = best["supplier"] if best else None
 
-        qualifies = (
-            cb is not None and target_eur is not None
-            and buy_eur <= (target_eur * (Decimal(1) - m))
-        )
-        if qualifies:
-            ok += 1
-            margin_pct = (target_eur - buy_eur) / target_eur * Decimal(100)
+        margin_pct = None
+        if not has_target:
+            # supply overview: "ok" when at least one supplier can supply it
+            status = "ok" if best is not None else "no"
+        elif best is not None and target_eur is not None and buy_eur <= (target_eur * (Decimal(1) - m)):
             status = "ok"
+            margin_pct = (target_eur - buy_eur) / target_eur * Decimal(100)
         else:
-            no += 1
             status = "no"
-            margin_pct = None
+        ok += status == "ok"
+        no += status == "no"
 
         results.append({
             "ean": ean, "description": desc, "status": status,
@@ -94,7 +95,7 @@ def compute(conn, lines: list[dict], margin) -> dict:
             "supplier": supplier,
             "buy_eur": str(buy_eur.quantize(money.CENT)) if buy_eur is not None else None,
             "margin_pct": str(margin_pct.quantize(Decimal("0.1"))) if margin_pct is not None else None,
-            "currency": currency,
+            "currency": currency, "suppliers": suppliers_out,
         })
 
     return {"results": results, "ok": ok, "no": no, "unknown": unknown, "count": len(lines)}

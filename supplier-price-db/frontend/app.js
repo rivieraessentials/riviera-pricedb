@@ -139,6 +139,33 @@ function parseWorkbook(buf) {
   wb.SheetNames.forEach(n => { const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true }); const r = parseSheetRows(rows); if (r.ok) { all = all.concat(r.rows); bad += r.bad; sheets++; } });
   return { rows: all, bad, sheets };
 }
+// Customer-request file: an EAN column and an OPTIONAL price column. The target comes only from
+// a detected price column (never stray numbers in a description), so an EAN+description file with
+// no price yields EAN-only lines (target = null).
+function parseRequestWorkbook(buf) {
+  const wb = XLSX.read(buf, { type: "array" });
+  const out = [];
+  wb.SheetNames.forEach(n => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true });
+    if (!rows.length) return;
+    let hi = 0, bestScore = -1, cols = null;
+    for (let i = 0; i < Math.min(rows.length, 40); i++) { const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
+    const hasHeader = bestScore > 0;
+    cols = cols || { ean: -1, prices: [] };
+    const dataStart = hasHeader ? hi + 1 : 0;
+    const sample = rows.slice(dataStart, dataStart + 60).filter(r => r && r.some(x => x != null && x !== ""));
+    const ncol = Math.max(0, ...rows.slice(hi, hi + 60).map(r => r ? r.length : 0));
+    if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let nn = 0; sample.forEach(r => { if (looksEan(r[c])) nn++; }); if (nn > bn) { bn = nn; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
+    if (cols.ean < 0) return;
+    for (let r = dataStart; r < rows.length; r++) {
+      const row = rows[r] || []; const code = eanCanon(row[cols.ean]);
+      if (!code || (code.length !== 13 && code.length !== 8)) continue;
+      const ps = (cols.prices || []).map(i => toNum(row[i])).filter(v => v != null && v > 0);
+      out.push({ ean: code, target: ps.length ? Math.round(Math.min(...ps) * 100) / 100 : null });
+    }
+  });
+  return out;
+}
 
 // ---------- state + store ----------
 let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null;
@@ -350,21 +377,39 @@ VIEWS.requests = async function (c) {
         </span></div>
       <table class="tbl"><thead><tr><th>Date</th><th>Customer</th><th>Brand</th><th>Lines</th><th>Can supply</th><th>Margin</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`;
   }
-  c.innerHTML = `<div class="alert alert-blue">Only <b>EAN &amp; target price</b> (and currency) are used — other columns are ignored and matched to the database by EAN. Choose the customer company, brand and date; requests keep inputs only and the result is recomputed live.</div>
+  c.innerHTML = `<div class="alert alert-blue"><b>EAN is required; the target price is optional.</b> With a target we check the margin; <b>without one we just list every supplier that can supply the EAN, cheapest first</b>. Other columns are ignored and matched by EAN. Requests keep inputs only and are recomputed live against current and future offers.</div>
     <div class="card"><div class="card-title">New request <button class="sm" style="margin-left:auto" data-act="reqfile">⬆ Upload Excel</button></div>
       <div class="grid2" style="margin-bottom:12px">
         <div><div class="fl">Customer company <span class="muted">(optional)</span></div><input id="req-cust" list="custlist" placeholder="company name"/><datalist id="custlist">${custOpts}</datalist></div>
         <div><div class="fl">Brand <span class="muted">(optional — type to search, or enter a new one)</span></div>${comboField("req-brand", "— any — type to search or add a brand", "")}</div>
         <div><div class="fl">Request date</div><input id="req-date" type="date" value="${esc(today())}"/></div>
-        <div><div class="fl">Min margin %</div><input id="margin" type="number" value="7" step="0.5"/></div>
+        <div><div class="fl">Min margin % <span class="muted">(used only with a target)</span></div><input id="margin" type="number" value="7" step="0.5"/></div>
         <div><div class="fl">Target currency</div><select id="req-cur">${store.currencies.map(cu => `<option>${esc(cu)}</option>`).join("")}</select></div></div>
-      <div><div class="fl">Request lines (EAN + target price per line)</div><textarea id="reqin" placeholder="EAN &lt;tab&gt; target price, one per line"></textarea></div>
+      <div><div class="fl">Request lines (one EAN per line; optionally a &lt;tab&gt; target price)</div><textarea id="reqin" placeholder="5901234123457&#10;5060150185335&#9;12.50&#10;… one EAN per line, target price optional"></textarea></div>
       <div style="text-align:right;margin-top:10px"><button class="primary" data-act="runsrc">Find suppliers</button></div></div>
     <div id="srcout">${lastResult ? requestResultHTML(lastResult) : ""}</div>${hist}`;
 };
 function marginPct(m) { const n = parseFloat(m); return isFinite(n) ? (Math.round(n * 1000) / 10) : m; }
 function requestResultHTML(req) {
-  const rows = (req.results || []).map(r => {
+  const results = req.results || [];
+  const hasTarget = results.some(r => r.target_eur != null);
+  const head = `${esc(req.customer || "—")} · ${esc(fmtDate(req.request_date))}${req.brand ? " · " + esc(req.brand) : ""}`;
+  if (!hasTarget) {
+    // supply overview: list every supplier that can supply each EAN, cheapest first
+    const rows = results.map(r => {
+      if (r.status === "unknown") return `<tr><td class="muted">${esc(r.ean)}</td><td>${esc(r.description || "")}</td><td><span class="badge badge-amber">EAN not in database</span></td></tr>`;
+      const sl = r.suppliers || [];
+      if (!sl.length) return `<tr><td class="muted">${esc(r.ean)}</td><td>${esc(r.description || "")}</td><td><span class="badge badge-red">no live supplier</span></td></tr>`;
+      const list = sl.map((s, i) => `<span class="${i === 0 ? "best-euro" : "muted"}" style="margin-right:14px;white-space:nowrap">${fmt(s.unit_price_eur)} ${esc(s.supplier || "")}</span>`).join("");
+      return `<tr><td class="muted">${esc(r.ean)}</td><td>${esc(r.description || "")}</td><td>${list}</td></tr>`;
+    }).join("");
+    return `<div class="stat-grid"><div class="stat green"><div class="stat-label">Can supply</div><div class="stat-value">${req.ok}</div></div>
+        <div class="stat"><div class="stat-label">No supplier</div><div class="stat-value">${req.no}</div></div>
+        <div class="stat"><div class="stat-label">Unknown EAN</div><div class="stat-value">${req.unknown}</div></div></div>
+       <div class="card"><div class="card-title">Result — ${head} <span class="muted" style="font-weight:400">· no target — suppliers cheapest first</span></div>
+        <table class="tbl"><thead><tr><th>EAN</th><th>Product (from DB)</th><th>Suppliers — cheapest first (best in green)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  const rows = results.map(r => {
     if (r.status === "unknown") return `<tr><td class="muted">${esc(r.ean)}</td><td>${esc(r.description || "")}</td><td class="num">—</td><td colspan="3"><span class="badge badge-amber">EAN not in database</span></td></tr>`;
     if (r.status === "ok") return `<tr><td class="muted">${esc(r.ean)}</td><td>${esc(r.description || "")}</td><td class="num">${fmt(r.target_eur)}</td><td>${esc(r.supplier || "")}</td><td class="num best-euro">${fmt(r.buy_eur)}</td><td class="num"><span class="badge badge-green">+${esc(r.margin_pct)}%</span></td></tr>`;
     return `<tr><td class="muted">${esc(r.ean)}</td><td>${esc(r.description || "")}</td><td class="num">${fmt(r.target_eur)}</td><td colspan="2"><span class="badge badge-red">no live supplier meets margin</span> <span class="muted">cheapest ${r.buy_eur != null ? fmt(r.buy_eur) + " / " + esc(r.supplier || "") : "—"}</span></td><td></td></tr>`;
@@ -372,7 +417,7 @@ function requestResultHTML(req) {
   return `<div class="stat-grid"><div class="stat green"><div class="stat-label">Can supply</div><div class="stat-value">${req.ok}</div></div>
       <div class="stat"><div class="stat-label">No margin</div><div class="stat-value">${req.no}</div></div>
       <div class="stat"><div class="stat-label">Unknown EAN</div><div class="stat-value">${req.unknown}</div></div></div>
-     <div class="card"><div class="card-title">Result — ${esc(req.customer || "—")} · ${esc(fmtDate(req.request_date))}${req.brand ? " · " + esc(req.brand) : ""}</div>
+     <div class="card"><div class="card-title">Result — ${head}</div>
       <table class="tbl"><thead><tr><th>EAN</th><th>Product (from DB)</th><th class="num">Target</th><th>Best supplier</th><th class="num">Buy</th><th class="num">Margin</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
@@ -552,9 +597,9 @@ async function runSourcing() {
   const lines = [];
   document.getElementById("reqin").value.split("\n").map(l => l.trim()).filter(Boolean).forEach(l => {
     const { ean, target } = parseReqLine(l);
-    if (ean && target != null) lines.push({ ean, target_price: String(target), currency });
+    if (ean) lines.push(target != null ? { ean, target_price: String(target), currency } : { ean, currency });
   });
-  if (!lines.length) { toast("No EAN + target price lines found."); return; }
+  if (!lines.length) { toast("No valid EAN lines found."); return; }
   try {
     const req = await api("POST", "/requests", { customer, brand, request_date, margin: String(margin), lines });
     lastResult = req; await loadStore(); render();
@@ -765,12 +810,14 @@ function startOfferImport(f) { _pendingFile = f; readFileThen(f, buf => { _pendi
 function startRequestUpload(f) {
   readFileThen(f, buf => {
     try {
-      const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true });
-      const out = [];
-      for (const row of rows) { const { ean, target } = parseReqLine((row || []).join("\t")); if (ean && target != null) out.push(ean + "\t" + target); }
-      if (!out.length) { toast("No EAN + price rows found in that file."); return; }
-      view = "requests"; setActiveNav("requests"); render().then(() => { const ta = document.getElementById("reqin"); if (ta) ta.value = out.join("\n"); });
+      const rows = parseRequestWorkbook(new Uint8Array(buf));
+      if (!rows.length) { toast("No EANs found in that file."); return; }
+      const out = rows.map(r => r.target != null ? (r.ean + "\t" + r.target) : r.ean);
+      const noTarget = rows.filter(r => r.target == null).length;
+      view = "requests"; setActiveNav("requests"); render().then(() => {
+        const ta = document.getElementById("reqin"); if (ta) ta.value = out.join("\n");
+        toast(`${rows.length} EAN(s) loaded${noTarget === rows.length ? " (no prices — Find suppliers will list who can supply them)" : ""}. Review, then Find suppliers.`);
+      });
     } catch (e) { toast("Upload failed: " + e.message); }
   });
 }
