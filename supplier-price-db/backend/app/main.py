@@ -214,6 +214,20 @@ def create_app(config: Config | None = None) -> FastAPI:
             return [{"brand_id": int(r["brand_id"]), "name": r["name"]}
                     for r in repo.list_brands(conn)]
 
+    @app.get("/currencies")
+    def currencies(who: Identity = Depends(require_identity)):
+        """Currencies offerable at import: EUR first, then the configured FX symbols (so USD
+        and the rest are always selectable even before any rate is fetched), then any extra
+        currency that already has a stored rate."""
+        with get_conn() as conn:
+            rated = [r["currency"] for r in conn.execute("SELECT DISTINCT currency FROM fx_rates")]
+        out: list[str] = []
+        for c in ["EUR", *cfg.fx.symbols, *rated]:
+            cu = (c or "").upper()
+            if cu and cu not in out:
+                out.append(cu)
+        return {"currencies": out}
+
     @app.get("/suppliers")
     def list_suppliers(who: Identity = Depends(require_identity)):
         with get_conn() as conn:

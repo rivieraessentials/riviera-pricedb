@@ -143,24 +143,26 @@ function parseWorkbook(buf) {
 // ---------- state + store ----------
 let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null;
 let sortCol = null, sortDir = 1, searchQ = "", terrFilter = "all", cmpA = "", cmpB = "";
-let reqBrand = "All", reqCust = "All", lastResult = null;
+let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
 const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
 let _gridRows = {}, _curCols = [];
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
-const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [] };
-let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null;
+const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [], currencies: ["EUR"] };
+let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null;
 
 function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (11 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (5 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(102 * gridZoom) + "px"); r.setProperty("--prod-w", Math.round(170 * gridZoom) + "px"); }
 function setZoom(d) { gridZoom = Math.min(1.5, Math.max(0.6, Math.round((gridZoom + d * 0.1) * 10) / 10)); try { localStorage.setItem("pdbZoom", gridZoom); } catch (e) {} applyZoom(); render(); }
 function brandList() { return store.brands.slice().sort((a, b) => a.name.localeCompare(b.name)); }
+function letterOf(n) { const ch = (n || "#").trim().charAt(0).toUpperCase(); return /[A-Z]/.test(ch) ? ch : "#"; }
 function curOrder() { return ["EUR", ...Object.keys(store.fx.rates || {}).filter(c => c !== "EUR")]; }
 
 async function loadStore() {
-  const [brands, suppliers, fx, customers] = await Promise.all([
-    apiGet("/brands"), apiGet("/suppliers"), apiGet("/fx/rates"), apiGet("/customers"),
+  const [brands, suppliers, fx, customers, currencies] = await Promise.all([
+    apiGet("/brands"), apiGet("/suppliers"), apiGet("/fx/rates"), apiGet("/customers"), apiGet("/currencies"),
   ]);
   store.brands = brands || []; store.suppliers = suppliers || [];
   store.fx = fx || { rate_date: "", rates: {} }; store.customers = customers || [];
+  store.currencies = (currencies && currencies.currencies && currencies.currencies.length) ? currencies.currencies : ["EUR"];
 }
 
 // ---------- currency selector + nav ----------
@@ -202,8 +204,14 @@ VIEWS.rankings = async function (c) {
   const showDiff = cmpA && cmpB && bs.some(b => b.batch_id == cmpA) && bs.some(b => b.batch_id == cmpB);
 
   let h = toolbarHTML();
-  h += '<div class="pills">' + brands.map(b => `<div class="pill ${b.name === activeBrand ? "active" : ""}" data-act="brand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") +
-    `<div class="pill ${unknown ? "active" : ""}" data-act="brand" data-brand="${UNK}" title="products whose brand isn't known yet — they move to a brand's tab when a branded offer for that EAN is imported">❓ Unknown brands</div>` + "</div>";
+  // Compact A–Z index: a letter bar, expanding into that letter's brands when clicked.
+  const letters = [...new Set(brands.map(b => letterOf(b.name)))].sort();
+  if (!unknown && activeBrand && brandLetter === null) brandLetter = letterOf(activeBrand);
+  if (brandLetter === null || !letters.includes(brandLetter)) brandLetter = letters[0] || null;
+  const letterBrands = brands.filter(b => letterOf(b.name) === brandLetter);
+  h += '<div class="pills">' + letters.map(L => `<div class="pill ${L === brandLetter && !unknown ? "active" : ""}" data-act="brandletter" data-letter="${L}" style="min-width:32px;text-align:center;padding:6px 9px;font-weight:700">${L}</div>`).join("") +
+    `<div class="pill ${unknown ? "active" : ""}" data-act="brand" data-brand="${UNK}" style="margin-left:6px" title="products whose brand isn't known yet — they move to a brand's tab when a branded offer for that EAN is imported">❓ Unknown</div>` + "</div>";
+  if (letterBrands.length) h += '<div class="pills">' + letterBrands.map(b => `<div class="pill ${b.name === activeBrand ? "active" : ""}" data-act="brand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") + "</div>";
   h += `<div class="cmprow"><b>Compare →</b> tick the ☆ in two column headers to show a Δ% column. ${(cmpA || cmpB) ? '<button class="sm" data-act="cmpclear">clear</button>' : '<span class="muted">(then the grid narrows to those two)</span>'}</div>`;
 
   let prods = data.rows.slice();
@@ -324,7 +332,7 @@ VIEWS.requests = async function (c) {
         <div><div class="fl">Brand <span class="muted">(optional)</span></div><input id="req-brand" list="reqbrandlist" placeholder="— any —"/><datalist id="reqbrandlist">${brandOpts}</datalist></div>
         <div><div class="fl">Request date</div><input id="req-date" type="date" value="${esc(today())}"/></div>
         <div><div class="fl">Min margin %</div><input id="margin" type="number" value="7" step="0.5"/></div>
-        <div><div class="fl">Target currency</div><select id="req-cur">${curOrder().map(cu => `<option>${esc(cu)}</option>`).join("")}</select></div></div>
+        <div><div class="fl">Target currency</div><select id="req-cur">${store.currencies.map(cu => `<option>${esc(cu)}</option>`).join("")}</select></div></div>
       <div><div class="fl">Request lines (EAN + target price per line)</div><textarea id="reqin" placeholder="EAN &lt;tab&gt; target price, one per line"></textarea></div>
       <div style="text-align:right;margin-top:10px"><button class="primary" data-act="runsrc">Find suppliers</button></div></div>
     <div id="srcout">${lastResult ? requestResultHTML(lastResult) : ""}</div>${hist}`;
@@ -584,7 +592,7 @@ function openImportWizard(name) {
          <input id="iw-brand-new" style="display:none;margin-top:6px" placeholder="new brand name"/></div>
        <div><div class="fl">Offer type *</div><select id="iw-kind"><option value="price_list">Regular offer (longer validity)</option><option value="stock_offer">Stock offer (limited in time and/or quantity)</option></select></div>
        <div><div class="fl">Territory *</div><select id="iw-terr"><option value="T2">T2 · European</option><option value="T1">T1 · non-European</option></select></div>
-       <div><div class="fl">Currency</div><select id="iw-cur">${curOrder().map(c => `<option>${esc(c)}</option>`).join("")}</select></div>
+       <div><div class="fl">Currency</div><select id="iw-cur">${store.currencies.map(c => `<option>${esc(c)}</option>`).join("")}</select></div>
        <div><div class="fl">Received date</div><input id="iw-date" type="date" value="${esc(today())}"/></div>
        <div><div class="fl">Notes (promotion…)</div><input id="iw-notes" placeholder="business info only"/></div>
        <div><div class="fl">Lead time</div><input id="iw-lead" placeholder="e.g. 2-3 weeks"/></div>
@@ -620,6 +628,16 @@ async function doImport() {
   try { parsed = parseWorkbook(new Uint8Array(_pendingBytes)); }
   catch (e) { toast("Could not read the file: " + e.message); return; }
   if (!parsed.rows.length) { toast("Could not find an EAN + price table (" + parsed.sheets + " sheet(s) scanned)."); return; }
+
+  // Guard: a single-brand import of a file that clearly lists several brands would force them
+  // all under one brand (the mistake that mixed earlier catalogues). Offer to switch.
+  if (!multibrand) {
+    const fb = [...new Set(parsed.rows.map(r => (r.brand || "").trim()).filter(Boolean))];
+    if (fb.length >= 2) {
+      const goOn = await confirmSingleOnMulti(fb.length, singleBrand);
+      if (!goOn) return;   // user will cancel and pick Multi-brand
+    }
+  }
 
   // Multi-brand with a brand column: known brands file automatically; NEW brand names need the
   // owner's OK (you chose "hold in Unknown until I confirm"). Unticked/declined -> Unknown tab.
@@ -668,6 +686,17 @@ async function doImport() {
   } catch (e) { toast("Import failed: " + e.message); }
 }
 
+// Guard dialog: the chosen file looks multi-brand but single-brand was picked.
+function confirmSingleOnMulti(n, brandName) {
+  return new Promise(resolve => {
+    _importGuardResolve = resolve;
+    openModal(`<div class="detail-header"><div><h2>This looks like a multi-brand file</h2><div class="sub">${n} different brands found in a brand column</div></div><div class="x" data-act="guardcancel">×</div></div>
+      <div class="detail-body"><div class="alert alert-amber">You picked a <b>single brand</b>${brandName ? ` (“${esc(brandName)}”)` : ""}, which files <b>every row</b> under it. This file lists <b>${n} brands</b> in a brand column — use <b>🔀 Multi-brand</b> instead to keep them separate (new names ask for your OK).</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <button class="primary" data-act="guardcancel">Cancel — pick Multi-brand</button><button class="danger" data-act="guardsingle">Import all as one brand anyway</button></div></div>`);
+  });
+}
+
 // Approval step for brand names found in a multi-brand file that aren't in the system yet.
 // Resolves to the array of approved (ticked) names, or null if the owner cancels the import.
 function confirmNewBrands(newBrands, counts) {
@@ -705,13 +734,14 @@ function setActiveNav(v) { document.querySelectorAll(".nav-item").forEach(x => x
 // ---------- event delegation (no inline handlers anywhere) ----------
 document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", () => { setActiveNav(n.dataset.view); view = n.dataset.view; cmpA = cmpB = ""; sortCol = null; render(); }));
 document.getElementById("cur").addEventListener("change", e => { display = e.target.value; render(); });
-document.getElementById("modal").addEventListener("click", e => { if (e.target.id === "modal") { if (_brandApproveResolve) { const r = _brandApproveResolve; _brandApproveResolve = null; r(null); } closeModal(); } });
+document.getElementById("modal").addEventListener("click", e => { if (e.target.id === "modal") { if (_brandApproveResolve) { const r = _brandApproveResolve; _brandApproveResolve = null; r(null); } if (_importGuardResolve) { const r = _importGuardResolve; _importGuardResolve = null; r(false); } closeModal(); } });
 
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, bid = el.dataset.bid, ean = el.dataset.ean, id = el.dataset.id;
   switch (act) {
-    case "brand": activeBrand = el.dataset.brand; sortCol = null; cmpA = cmpB = ""; render(); break;
+    case "brand": activeBrand = el.dataset.brand; sortCol = null; cmpA = cmpB = ""; if (activeBrand !== "__unknown__") brandLetter = letterOf(activeBrand); render(); break;
+    case "brandletter": brandLetter = el.dataset.letter; render(); break;
     case "bsbrand": bsBrand = el.dataset.brand; render(); break;
     case "terr": terrFilter = el.dataset.terr; render(); break;
     case "zoom": setZoom(parseInt(el.dataset.dir, 10)); break;
@@ -743,6 +773,8 @@ document.addEventListener("click", e => {
     case "confirmyes": { const cb = _confirmCb; _confirmCb = null; closeModal(); if (cb) cb(); break; }
     case "brandcancel": { const r = _brandApproveResolve; _brandApproveResolve = null; closeModal(); if (r) r(null); break; }
     case "brandcontinue": { const r = _brandApproveResolve; _brandApproveResolve = null; const picked = [...document.querySelectorAll(".brand-approve:checked")].map(x => x.dataset.brand); closeModal(); if (r) r(picked); break; }
+    case "guardcancel": { const r = _importGuardResolve; _importGuardResolve = null; closeModal(); if (r) r(false); break; }
+    case "guardsingle": { const r = _importGuardResolve; _importGuardResolve = null; closeModal(); if (r) r(true); break; }
   }
 });
 document.addEventListener("input", e => {

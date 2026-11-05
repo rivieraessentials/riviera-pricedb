@@ -122,6 +122,11 @@ def test_unknown_brand_tab_then_resolved_by_later_branded_offer(client):
     assert not any(r["ean"] == ean for r in client.get("/grid", params={"unknown": "true"}).json()["rows"])
 
 
+def test_currencies_offers_eur_and_usd(client):
+    cur = client.get("/currencies").json()["currencies"]
+    assert cur[0] == "EUR" and "USD" in cur          # configured symbols are offerable at import
+
+
 def test_multibrand_import_files_by_file_brand_column(client):
     s = _supplier(client, "StanCo")
     b = client.post("/batches", json={"supplier_id": s, "currency": "EUR", "kind": "price_list",
