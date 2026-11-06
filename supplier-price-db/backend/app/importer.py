@@ -34,7 +34,8 @@ _SIZE_UNITS = re.compile(
 
 def looks_size(v: str | None) -> bool:
     s = (v or "").strip()
-    if not s or not re.search(r"\d", s):
+    # a size has a number AND a unit letter (so a bare price like "6.01" is not a size)
+    if not s or not re.search(r"\d", s) or not re.search(r"[a-zà-ÿ]", s, re.I):
         return False
     rest = _SIZE_UNITS.sub(" ", s.lower())
     rest = re.sub(r"[\d.,+x×*/&()\[\]\s-]", "", rest)

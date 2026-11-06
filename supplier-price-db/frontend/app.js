@@ -97,7 +97,7 @@ function looksEan(v) { const c = eanCanon(v); return !!(c && (c.length === 8 || 
 const SIZE_UNITS = /(?<![a-zà-ÿ])(ml|cl|dl|mg|kg|grs|gr|oz|lb|pcs|pces|pce|pc|caps|cap|tabs|tab|sticks|stick|st|pz|pezzi|pieces?|pièces?|stuck|stück|unidades?|un|g|l|u|x)(?![a-zà-ÿ])/gi;
 function looksSize(v) {
   const s = (v == null ? "" : String(v)).trim();
-  if (!s || !/\d/.test(s)) return false;                 // a size always carries a number
+  if (!s || !/\d/.test(s) || !/[a-zà-ÿ]/i.test(s)) return false;   // a size has a number AND a unit letter (so a bare price like "6.01" is not a size)
   const rest = s.toLowerCase().replace(SIZE_UNITS, " ").replace(/[\d.,+x×*/&()[\]\s-]/g, "");
   return rest.length === 0;                              // only numbers + units were present
 }
@@ -141,7 +141,9 @@ function detectCols(hdr) {
 function parseSheetRows(rows) {
   if (!rows.length) return { rows: [], bad: 0, ok: false };
   let hi = 0, bestScore = -1, cols = null;
-  for (let i = 0; i < Math.min(rows.length, 40); i++) { const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0) + (c.desc >= 0 ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
+  // a row that already contains a real EAN is DATA, not a header — so a product name that happens
+  // to contain a keyword substring (e.g. "net" in "nettoyant") can't be mistaken for a header row.
+  for (let i = 0; i < Math.min(rows.length, 40); i++) { if ((rows[i] || []).some(looksEan)) continue; const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0) + (c.desc >= 0 ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
   const hasHeader = bestScore > 0;
   if (!hasHeader) { hi = 0; cols = { ean: -1, desc: -1, size: -1, ppb: -1, qty: -1, brand: -1, prices: [] }; }
   cols = cols || { ean: -1, desc: -1, size: -1, ppb: -1, qty: -1, brand: -1, prices: [] };
@@ -149,7 +151,9 @@ function parseSheetRows(rows) {
   const ncol = Math.max(0, ...rows.slice(hi, hi + 60).map(r => r ? r.length : 0));
   const sample = rows.slice(dataStart, dataStart + 60).filter(r => r && r.some(x => x != null && x !== ""));
   if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let n = 0; sample.forEach(r => { if (looksEan(r[c])) n++; }); if (n > bn) { bn = n; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
-  if (!cols.prices.length) { const cand = []; for (let c = 0; c < ncol; c++) { if (c === cols.ean) continue; let num = 0, dec = 0; sample.forEach(r => { const v = toNum(r[c]); if (v != null && v > 0) { num++; if (/\d[.,]\d/.test(String(r[c]))) dec++; } }); if (num >= Math.max(2, sample.length * 0.4) && dec >= 1) cand.push(c); } cols.prices = cand; }
+  // a size column (120 ml, 1 L) is never a price column, even if it parses as a number
+  if (cols.prices.length) cols.prices = cols.prices.filter(c => !colIsMostlySize(sample, c));
+  if (!cols.prices.length) { const cand = []; for (let c = 0; c < ncol; c++) { if (c === cols.ean || colIsMostlySize(sample, c)) continue; let num = 0, dec = 0; sample.forEach(r => { const v = toNum(r[c]); if (v != null && v > 0) { num++; if (/\d[.,]\d/.test(String(r[c]))) dec++; } }); if (num >= Math.max(2, sample.length * 0.4) && dec >= 1) cand.push(c); } cols.prices = cand; }
   { const byText = pickDescCol(sample, ncol, [cols.ean, cols.qty, ...cols.prices]);
     // use the text column when the header gave none, or when the header's pick is really sizes
     if (cols.desc < 0) cols.desc = byText;
@@ -181,14 +185,18 @@ function parseRequestWorkbook(buf) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true });
     if (!rows.length) return;
     let hi = 0, bestScore = -1, cols = null;
-    for (let i = 0; i < Math.min(rows.length, 40); i++) { const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
+    // a row containing a real EAN is data, not a header (so a name with a keyword substring is safe)
+    for (let i = 0; i < Math.min(rows.length, 40); i++) { if ((rows[i] || []).some(looksEan)) continue; const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
     const hasHeader = bestScore > 0;
-    cols = cols || { ean: -1, prices: [] };
+    if (!hasHeader) cols = { ean: -1, desc: -1, size: -1, ppb: -1, qty: -1, brand: -1, prices: [] };
+    cols = cols || { ean: -1, desc: -1, size: -1, ppb: -1, qty: -1, brand: -1, prices: [] };
     const dataStart = hasHeader ? hi + 1 : 0;
     const sample = rows.slice(dataStart, dataStart + 60).filter(r => r && r.some(x => x != null && x !== ""));
     const ncol = Math.max(0, ...rows.slice(hi, hi + 60).map(r => r ? r.length : 0));
     if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let nn = 0; sample.forEach(r => { if (looksEan(r[c])) nn++; }); if (nn > bn) { bn = nn; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
     if (cols.ean < 0) return;
+    // a size column is never a target-price column
+    cols.prices = (cols.prices || []).filter(c => !colIsMostlySize(sample, c));
     // description column: real text, never the size column (a number + ml/l/g)
     { const byText = pickDescCol(sample, ncol, [cols.ean, cols.qty, ...(cols.prices || [])]);
       if (cols.desc < 0) cols.desc = byText;
