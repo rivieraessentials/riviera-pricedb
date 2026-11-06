@@ -68,6 +68,9 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
   tabs. (Bug fixed: ticked brands must actually be created.)
 - Ability to **add a brand manually** (type a name that isn't in the list yet), so a request can be
   logged today for a brand not yet in the system and matched to a full offer uploaded later.
+- **Merge duplicate brands:** "⇄ Merge brands" in Offers combines two brands (e.g. "J.P. Gaultier"
+  into "JEAN PAUL GAULTIER") — every product moves to the kept brand and the source is removed. EAN
+  is unique per product, so duplicates are excluded by construction. `POST /brands/merge`.
 - **Compact brand overview:** an A–Z letter index; click a letter to expand its brands. The brand
   picker is a **searchable combobox** (the list is long) that also accepts a typed new name.
 
@@ -81,6 +84,11 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
 - The brand picker on a request offers **"Multi-brand"** (first in the list) for a request that spans
   brands; matching stays by EAN regardless of the label. The typed customer / brand / date / margin /
   currency must survive an **Excel upload** (the upload must not wipe fields already filled in).
+- **Request history is an accordion** grouped by customer: click a customer to expand/collapse its
+  requests, with Expand all / Collapse all — navigable without scrolling when there are many.
+- A request file may be headed **EAN / DESC / QTY / TARGET**; the exact target price (e.g. 15,65) is
+  read even when it sits under the wrong header or uses a comma decimal — never rounded to a whole
+  number. "TARGET"/"cible"/"objectif" are recognised as the target column, "DESC" as the description.
 - **No personal data** — customer is an optional company name only, no contact details.
 - **Target price is optional:**
   - With a target: margin view — "ok" when the cheapest live supplier meets the margin
