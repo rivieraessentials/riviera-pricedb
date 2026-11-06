@@ -385,7 +385,8 @@ VIEWS.requests = async function (c) {
   const custOpts = store.customers.map(cu => `<option value="${esc(cu)}">`).join("");
   const knownBrands = [...new Set([...brandList().map(b => b.name), ...reqs.map(r => r.brand).filter(Boolean)])]
     .sort((a, b) => a.localeCompare(b));
-  _comboOptions["req-brand"] = knownBrands;
+  // "Multi-brand" is always offered first (a request can span brands); matching is by EAN regardless
+  _comboOptions["req-brand"] = ["Multi-brand", ...knownBrands.filter(b => b.toLowerCase() !== "multi-brand")];
   const custs = [...new Set(reqs.map(r => r.customer).filter(Boolean))];
 
   let hist = "";
@@ -856,7 +857,12 @@ function startRequestUpload(f) {
       reqDescriptions = {}; rows.forEach(r => { if (r.desc) reqDescriptions[r.ean] = r.desc; });
       const out = rows.map(r => r.target != null ? (r.ean + "\t" + r.target) : r.ean);
       const noTarget = rows.filter(r => r.target == null).length;
+      // keep anything already typed into the form (the re-render would otherwise clear it)
+      const keep = id => { const el = document.getElementById(id); return el ? el.value : ""; };
+      const prev = { cust: keep("req-cust"), brand: keep("req-brand"), date: keep("req-date"), margin: keep("margin"), cur: keep("req-cur") };
       view = "requests"; setActiveNav("requests"); render().then(() => {
+        const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+        set("req-cust", prev.cust); set("req-brand", prev.brand); set("req-date", prev.date); set("margin", prev.margin); set("req-cur", prev.cur);
         const ta = document.getElementById("reqin"); if (ta) ta.value = out.join("\n");
         toast(`${rows.length} EAN(s) loaded${noTarget === rows.length ? " (no prices — Find suppliers will list who can supply them)" : ""}. Review, then Find suppliers.`);
       });
