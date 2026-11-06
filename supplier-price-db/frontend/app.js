@@ -124,13 +124,13 @@ function detectCols(hdr) {
   let ean = -1, desc = -1, size = -1, ppb = -1; const prices = [];
   const inc = (l, ...n) => n.some(x => l.includes(x));
   L.forEach((l, i) => { if (ean < 0 && l && inc(l, "ean", "upc", "gtin", "barcode", "product code", "product-code", "cod. a barre", "codice a barre") || (ean < 0 && (l === "code" || l === "ref" || l === "reference" || l === "référence" || l === "product code"))) ean = i; });
-  const descGroups = [["description", "descrizione", "designation", "désignation", "libell"], ["name", "nom"], ["sku", "article", "denomin", "item", "label"], ["product"]];
+  const descGroups = [["description", "descrizione", "designation", "désignation", "libell", "desc"], ["name", "nom"], ["sku", "article", "denomin", "item", "label"], ["product"]];
   for (const grp of descGroups) { if (desc >= 0) break; L.forEach((l, i) => { if (desc < 0 && i !== ean && l && !l.includes("code") && grp.some(x => l === x || l.includes(x))) desc = i; }); }
   L.forEach((l, i) => { if (size < 0 && l && (l === "size" || l === "ml" || l === "taille" || inc(l, "pack size", "format", "volume", "capacity"))) size = i; });
   L.forEach((l, i) => { if (ppb < 0 && l && inc(l, "case pack", "prepack", "outer pack", "pcs/box", "pcs / box", "per box", "colisage", "units/box", "pieces per", "qty/box", "pcb")) ppb = i; });
   let qty = -1;
   L.forEach((l, i) => { if (qty < 0 && i !== ean && l && (l === "qty" || l === "quantity" || l === "stock" || l === "q.ty" || inc(l, "available qty", "qty available", "available quantity", "in stock", "disponib", "dispo", "stock qty", "quantité", "quantity available"))) qty = i; });
-  const PK = ["price", "eur", "usd", "gbp", "sgd", "cad", "hkd", "srp", "euro", "prix", "cost", "wholesale", "retail", "pvp", "net", "prezzo", "preis"];
+  const PK = ["price", "eur", "usd", "gbp", "sgd", "cad", "hkd", "srp", "euro", "prix", "cost", "wholesale", "retail", "pvp", "net", "prezzo", "preis", "target", "cible", "objectif"];
   const EX = ["total", "order", "qty", "quantity", "stock", "available", "moq", "tariff", "code", "pack", "pieces", "pcs", "margin", "discount", "vat"];
   L.forEach((l, i) => { if (i === ean || i === qty) return; if (l && PK.some(k => l.includes(k)) && !EX.some(x => l.includes(x))) prices.push(i); });
   // brand column (used only for multi-brand imports; absent on many files)
@@ -195,9 +195,21 @@ function parseRequestWorkbook(buf) {
     const ncol = Math.max(0, ...rows.slice(hi, hi + 60).map(r => r ? r.length : 0));
     if (cols.ean < 0) { let bc = -1, bn = -1; for (let c = 0; c < ncol; c++) { let nn = 0; sample.forEach(r => { if (looksEan(r[c])) nn++; }); if (nn > bn) { bn = nn; bc = c; } } if (bn >= Math.max(1, sample.length * 0.3)) cols.ean = bc; }
     if (cols.ean < 0) return;
-    // a size column is never a target-price column
-    cols.prices = (cols.prices || []).filter(c => !colIsMostlySize(sample, c));
-    // description column: real text, never the size column (a number + ml/l/g)
+    // keep only a target-price column that is not a size and actually holds a positive number in
+    // the data (a header like "TARGET" over an empty column is dropped, so we don't read nothing)
+    cols.prices = (cols.prices || []).filter(c => !colIsMostlySize(sample, c) && sample.some(r => { const v = toNum(r[c]); return v != null && v > 0; }));
+    // fallback: the target can be mis-aligned under another header (e.g. the value sits under QTY).
+    // Pick the column with the most positive DECIMAL numbers (15,65 / 13.04), never EAN or a size.
+    if (!cols.prices.length) {
+      let bc = -1, bn = -1;
+      for (let c = 0; c < ncol; c++) {
+        if (c === cols.ean || colIsMostlySize(sample, c)) continue;
+        let dec = 0; sample.forEach(r => { const v = toNum(r[c]); if (v != null && v > 0 && /\d[.,]\d/.test(String(r[c]))) dec++; });
+        if (dec > bn) { bn = dec; bc = c; }
+      }
+      if (bn >= Math.max(1, sample.length * 0.3)) cols.prices = [bc];
+    }
+    // description column: real text, never the size or price column
     { const byText = pickDescCol(sample, ncol, [cols.ean, cols.qty, ...(cols.prices || [])]);
       if (cols.desc < 0) cols.desc = byText;
       else if (byText >= 0 && byText !== cols.desc && colIsMostlySize(sample, cols.desc)) cols.desc = byText; }
