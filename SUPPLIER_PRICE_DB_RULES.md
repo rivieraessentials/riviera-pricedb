@@ -78,6 +78,9 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
   request always reflects today's offers and matches **current and future** uploads.
 - **Arranged per customer and per brand, saved for later.** History shows **which customer** and
   **what date**.
+- The brand picker on a request offers **"Multi-brand"** (first in the list) for a request that spans
+  brands; matching stays by EAN regardless of the label. The typed customer / brand / date / margin /
+  currency must survive an **Excel upload** (the upload must not wipe fields already filled in).
 - **No personal data** — customer is an optional company name only, no contact details.
 - **Target price is optional:**
   - With a target: margin view — "ok" when the cheapest live supplier meets the margin
