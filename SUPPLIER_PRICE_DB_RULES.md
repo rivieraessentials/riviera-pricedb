@@ -109,6 +109,15 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
   overwritten.
 - **Brand is resolved from the upload form, never silently from the file.** An EAN already under a
   different brand goes to review (no overwrite, no offer).
+- **Headerless files** are supported: a row that contains a real EAN is treated as data, never a
+  header (so a product name containing a keyword substring — e.g. "net" in "nettoyant" — is not
+  mistaken for a header row). A bare number (e.g. "6.01") is a price, not a size.
+
+## 7a. Editing a product
+
+- The product **description is editable in place**: click the Product cell in the Offers grid, type,
+  press Enter to save (Esc cancels). Clicking the **EAN cell** opens the full editor (brand +
+  description). Re-import also self-heals a size/empty description (§7).
 
 ## 8. Uploading (UX)
 

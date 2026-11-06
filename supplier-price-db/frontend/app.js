@@ -336,8 +336,8 @@ VIEWS.rankings = async function (c, _retried) {
     const best = p.best_eur == null ? null : parseFloat(p.best_eur);
     h += `<tr class="${p.is_bestseller ? "best-row" : ""}">
       <td class="c-star"><span class="star ${p.is_bestseller ? "on" : ""}" data-act="best" data-ean="${esc(p.ean)}">${p.is_bestseller ? "★" : "☆"}</span></td>
-      <td class="c-ean lx">${esc(p.ean)}</td>
-      <td class="c-prod lx" title="click to edit" data-act="prodedit" data-ean="${esc(p.ean)}">${p.description ? esc(p.description) : '<span class="muted">⚠ no description</span>'}</td>`;
+      <td class="c-ean lx" style="cursor:pointer" title="edit brand / description" data-act="prodedit" data-ean="${esc(p.ean)}">${esc(p.ean)}</td>
+      <td class="c-prod lx editable" title="click to edit the description" data-act="descedit" data-ean="${esc(p.ean)}">${p.description ? esc(p.description) : '<span class="muted">⚠ no description</span>'}</td>`;
     if (!showDiff) h += `<td class="best-euro">${best != null ? fmt(best) : "—"}</td>`;
     cols.forEach(b => { const v = priceOf(p, b.batch_id); const tag = b.batch_id == cmpA ? " colA" : b.batch_id == cmpB ? " colB" : "";
       if (v == null) { h += `<td class="pricecell${tag}"><span class="dlt">—</span></td>`; return; }
@@ -553,6 +553,27 @@ function confirmModal(msg, onYes, yesLabel, danger) {
 function today() { return new Date().toISOString().slice(0, 10); }
 
 // ---------- product edit / add line ----------
+// Inline-edit a product's description straight in the grid cell (click → type → Enter/blur saves).
+function startDescEdit(cell, ean) {
+  if (!cell || cell.querySelector("input")) return;
+  const cur = (_gridRows[ean] && _gridRows[ean].description) || "";
+  cell.innerHTML = `<input class="cell-edit" value="${esc(cur)}"/>`;
+  const inp = cell.querySelector("input");
+  inp.focus(); inp.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    const val = inp.value.trim();
+    if (save && val !== cur.trim()) {
+      try { await api("PATCH", "/products/" + encodeURIComponent(ean), { description: val }); await loadStore(); toast("Description saved."); }
+      catch (e) { toast(e.message); }
+    }
+    render();
+  };
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } });
+  // attach blur on the next tick so the opening click's own event cascade can't close the editor
+  setTimeout(() => inp.addEventListener("blur", () => finish(true)), 0);
+}
 async function openProductEdit(ean) {
   const data = await apiGet("/products/" + encodeURIComponent(ean) + "/offers").catch(() => null);
   const desc = (data && data.description) || "";
@@ -903,6 +924,7 @@ document.addEventListener("click", e => {
     case "movecol": moveCol(parseInt(bid, 10), parseInt(el.dataset.dir, 10)); break;
     case "offer": openOfferDetails(bid); break;
     case "prodedit": openProductEdit(ean); break;
+    case "descedit": startDescEdit(el, ean); break;
     case "best": toggleBest(ean); break;
     case "addfile": pickFile("addfile", startOfferImport); break;
     case "addline": addLineModal(); break;
