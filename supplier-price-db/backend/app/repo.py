@@ -434,6 +434,30 @@ def update_product(conn: sqlite3.Connection, ean: str, *, description: str | Non
                      (brand_id, status, str(ean)))
 
 
+def merge_brands(conn: sqlite3.Connection, from_id: int, into_id: int) -> int:
+    """Merge the `from` brand into `into`: move every product under `from` to `into`, relabel that
+    brand's offer-batch labels, then delete the now-empty `from` brand. Each EAN is a single product
+    under a single brand, so no product can collide — duplicates are excluded by construction.
+    Returns the number of products moved."""
+    from_id, into_id = int(from_id), int(into_id)
+    if from_id == into_id:
+        return 0
+    conn.execute("BEGIN")
+    try:
+        from_nm = brand_name(conn, from_id)
+        into_nm = brand_name(conn, into_id)
+        moved = conn.execute("UPDATE products SET brand_id = ? WHERE brand_id = ?",
+                             (into_id, from_id)).rowcount
+        if from_nm and into_nm:
+            conn.execute("UPDATE offer_batches SET brand = ? WHERE brand = ?", (into_nm, from_nm))
+        conn.execute("DELETE FROM brands WHERE brand_id = ?", (from_id,))
+        conn.execute("COMMIT")
+        return int(moved)
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def set_bestseller(conn: sqlite3.Connection, ean: str, flag: bool) -> None:
     conn.execute("UPDATE products SET is_bestseller = ? WHERE ean = ?",
                  (1 if flag else 0, str(ean)))

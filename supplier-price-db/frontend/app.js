@@ -229,6 +229,8 @@ let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null;
 let sortCol = null, sortDir = 1, searchQ = "", terrFilter = "all", curFilter = "all", cmpA = "", cmpB = "";
 let reqDescriptions = {};   // EAN -> description from the last uploaded request file (not persisted client-side)
 let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
+let reqOpen = {};           // customer -> expanded? (request history accordion)
+let _lastReqCusts = [];     // customers in the last-rendered history (for expand/collapse all)
 const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
 let _gridRows = {}, _curCols = [];
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
@@ -374,6 +376,7 @@ function toolbarHTML(currencies) {
   return `<div class="toolbar" style="justify-content:center">
     <button class="primary" data-act="addfile" data-drop="offer" title="click, or drag an .xlsx onto this button">⬆ Add file <span class="muted" style="font-weight:400;font-size:11px">or drop here</span></button>
     <button data-act="addline">＋ Add line</button>
+    <button data-act="mergebrands" title="combine two duplicate brands into one">⇄ Merge brands</button>
     <input id="offSearch" placeholder="🔍 search EAN or description…" value="${esc(searchQ)}" style="width:260px" data-act="search"/>
     <span class="seg"><button class="${terrFilter === "all" ? "on" : ""}" data-act="terr" data-terr="all">All</button>
       <button class="${terrFilter === "T2" ? "on" : ""}" data-act="terr" data-terr="T2">T2</button>
@@ -414,23 +417,32 @@ VIEWS.requests = async function (c) {
     let rows = reqs.slice();
     if (reqBrand !== "All") rows = rows.filter(r => r.brand === reqBrand);
     if (reqCust !== "All") rows = rows.filter(r => r.customer === reqCust);
-    // arranged per customer, then per brand, newest first within a group
-    rows.sort((a, b) => {
-      const ca = (a.customer || "~~").toLowerCase(), cb = (b.customer || "~~").toLowerCase();
-      if (ca !== cb) return ca < cb ? -1 : 1;
-      const ba = (a.brand || "~~").toLowerCase(), bb = (b.brand || "~~").toLowerCase();
-      if (ba !== bb) return ba < bb ? -1 : 1;
-      return (b.request_date || "").localeCompare(a.request_date || "");
-    });
-    let body = "", lastCust = null;
-    rows.forEach(r => {
-      const cust = r.customer || "— no customer —";
-      if (cust !== lastCust) { body += `<tr><td colspan="7" style="background:var(--bg3);font-weight:700">${esc(cust)}</td></tr>`; lastCust = cust; }
-      body += `<tr class="click" data-act="openreq" data-id="${r.request_id}"><td class="muted">${esc(fmtDate(r.request_date))}</td><td class="muted">${esc(cust)}</td><td><span class="badge badge-gray">${esc(r.brand || "any")}</span></td><td>${r.count}</td><td><span class="badge badge-green">${r.ok}</span></td><td class="muted">${esc(marginPct(r.margin))}%</td><td class="num"><button class="danger sm" data-act="delreq" data-id="${r.request_id}">🗑</button></td></tr>`;
+    // group by customer; each group is a collapsible accordion section (click the header to expand)
+    const groups = {};
+    rows.forEach(r => { const cu = r.customer || "— no customer —"; (groups[cu] = groups[cu] || []).push(r); });
+    const custNames = Object.keys(groups).sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1);
+    // with one group, or a single-customer filter, open it; otherwise honour the per-customer toggle
+    const autoOpen = custNames.length <= 1 || reqCust !== "All";
+    let body = "";
+    custNames.forEach(cu => {
+      const list = groups[cu].sort((a, b) => {
+        const ba = (a.brand || "~~").toLowerCase(), bb = (b.brand || "~~").toLowerCase();
+        if (ba !== bb) return ba < bb ? -1 : 1;
+        return (b.request_date || "").localeCompare(a.request_date || "");
+      });
+      const open = autoOpen || !!reqOpen[cu];
+      const okSum = list.reduce((s, r) => s + (r.ok || 0), 0);
+      body += `<tr class="click grouphdr" data-act="reqgroup" data-cust="${esc(cu)}"><td colspan="7" style="background:var(--bg3);font-weight:700;user-select:none"><span style="display:inline-block;width:15px;color:var(--text3)">${open ? "▾" : "▸"}</span>${esc(cu)} <span class="muted" style="font-weight:400">· ${list.length} request${list.length > 1 ? "s" : ""} · ${okSum} can-supply</span></td></tr>`;
+      if (open) list.forEach(r => {
+        body += `<tr class="click" data-act="openreq" data-id="${r.request_id}"><td class="muted" style="padding-left:22px">${esc(fmtDate(r.request_date))}</td><td class="muted">${esc(cu)}</td><td><span class="badge badge-gray">${esc(r.brand || "any")}</span></td><td>${r.count}</td><td><span class="badge badge-green">${r.ok}</span></td><td class="muted">${esc(marginPct(r.margin))}%</td><td class="num"><button class="danger sm" data-act="delreq" data-id="${r.request_id}">🗑</button></td></tr>`;
+      });
     });
     if (!rows.length) body = '<tr><td colspan=7><div class="empty">No requests match the filter.</div></td></tr>';
-    hist = `<div class="card"><div class="card-title">Request history <span class="muted" style="font-weight:400">· grouped by customer, then brand</span>
-        <span style="margin-left:auto;display:flex;gap:8px">
+    _lastReqCusts = custNames;
+    const allOpen = custNames.length > 0 && custNames.every(cu => autoOpen || reqOpen[cu]);
+    hist = `<div class="card"><div class="card-title">Request history <span class="muted" style="font-weight:400">· click a customer to expand</span>
+        <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          ${custNames.length > 1 ? `<button class="sm" data-act="reqexpand">${allOpen ? "Collapse all" : "Expand all"}</button>` : ""}
           <select data-act="reqbrand"><option ${reqBrand === "All" ? "selected" : ""}>All</option>${knownBrands.map(b => `<option ${reqBrand === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select>
           <select data-act="reqcust"><option ${reqCust === "All" ? "selected" : ""}>All</option>${custs.map(cu => `<option ${reqCust === cu ? "selected" : ""}>${esc(cu)}</option>`).join("")}</select>
         </span></div>
@@ -565,6 +577,30 @@ function confirmModal(msg, onYes, yesLabel, danger) {
 function today() { return new Date().toISOString().slice(0, 10); }
 
 // ---------- product edit / add line ----------
+// Merge two duplicate brands (e.g. "J.P. Gaultier" into "JEAN PAUL GAULTIER"): all products move,
+// the first brand is removed, EAN duplicates are excluded by the server.
+function openMergeBrands() {
+  const names = brandList().map(b => b.name);
+  _comboOptions["mg-from"] = names; _comboOptions["mg-into"] = names;
+  openModal(`<div class="detail-header"><div><h2>Merge brands</h2><div class="sub">move every product from one brand into another; the first brand is then removed</div></div><div class="x" data-act="closemodal">×</div></div>
+   <div class="detail-body">
+     <div class="grid2">
+       <div><div class="fl">Merge this brand <span class="muted">(removed)</span></div>${comboField("mg-from", "— type to search —", "")}</div>
+       <div><div class="fl">…into this one <span class="muted">(kept)</span></div>${comboField("mg-into", "— type to search —", "")}</div></div>
+     <div class="alert alert-amber" style="margin-top:14px">Every product and offer of the first brand moves to the second, matched by EAN with no duplicates. This can't be undone (re-importing the file would recreate the brand).</div>
+     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px"><button data-act="closemodal">Cancel</button><button class="primary" data-act="domerge">Merge brands</button></div></div>`);
+}
+async function doMergeBrands() {
+  const from = (document.getElementById("mg-from").value || "").trim();
+  const into = (document.getElementById("mg-into").value || "").trim();
+  if (!from || !into) { toast("Pick both brands."); return; }
+  if (from.toLowerCase() === into.toLowerCase()) { toast("Pick two different brands."); return; }
+  try {
+    const r = await api("POST", "/brands/merge", { from_brand: from, into_brand: into });
+    await loadStore(); activeBrand = r.into; brandLetter = letterOf(r.into); closeModal(); render();
+    toast(`Merged “${r.merged_from}” into “${r.into}” — ${r.products_moved} product(s) moved.`);
+  } catch (e) { toast(e.message); }
+}
 // Inline-edit a product's description straight in the grid cell (click → type → Enter/blur saves).
 function startDescEdit(cell, ean) {
   if (!cell || cell.querySelector("input")) return;
@@ -937,6 +973,8 @@ document.addEventListener("click", e => {
     case "offer": openOfferDetails(bid); break;
     case "prodedit": openProductEdit(ean); break;
     case "descedit": startDescEdit(el, ean); break;
+    case "mergebrands": openMergeBrands(); break;
+    case "domerge": doMergeBrands(); break;
     case "best": toggleBest(ean); break;
     case "addfile": pickFile("addfile", startOfferImport); break;
     case "addline": addLineModal(); break;
@@ -944,6 +982,8 @@ document.addEventListener("click", e => {
     case "runsrc": runSourcing(); break;
     case "openreq": openRequestDetail(id); break;
     case "delreq": deleteRequest(id); break;
+    case "reqgroup": { const cu = el.dataset.cust; reqOpen[cu] = !reqOpen[cu]; render(); break; }
+    case "reqexpand": { const all = _lastReqCusts.every(cu => reqOpen[cu]); reqOpen = {}; if (!all) _lastReqCusts.forEach(cu => reqOpen[cu] = true); render(); break; }
     case "newsup": newSupplierModal(); break;
     case "savesup": saveSupplier(); break;
     case "saveprod": saveProductEdit(ean); break;

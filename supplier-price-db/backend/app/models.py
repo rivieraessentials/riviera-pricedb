@@ -131,6 +131,11 @@ class BestsellerSet(BaseModel):
     is_bestseller: bool
 
 
+class BrandMerge(BaseModel):
+    from_brand: str                        # the duplicate brand to remove (its products move)
+    into_brand: str                        # the brand to keep
+
+
 class RequestLineIn(BaseModel):
     ean: str
     target_price: str | None = None        # exact decimal string; None = no target (supply overview)

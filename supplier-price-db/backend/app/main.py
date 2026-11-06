@@ -19,7 +19,7 @@ from . import db, export, fx, importer, money, offer_types, repo, sourcing, vali
 from .auth import Identity, require_identity
 from .config import Config, load_config
 from .models import (
-    BatchCreate, BatchOut, BestsellerSet, CurrentBestOut, EndOfferOut, FxManualRate,
+    BatchCreate, BatchOut, BestsellerSet, BrandMerge, CurrentBestOut, EndOfferOut, FxManualRate,
     FxRatesOut, FxRefreshOut, OffersCreate, OffersCreated, OfferHistoryItem, ProductCreate,
     ProductOffersOut, ProductUpdate, RequestCreate, ReviewItem, SupplierCreate, SupplierOut,
     SupplierUpdate,
@@ -215,6 +215,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         with get_conn() as conn:
             return [{"brand_id": int(r["brand_id"]), "name": r["name"]}
                     for r in repo.list_brands(conn)]
+
+    @app.post("/brands/merge")
+    def merge_brands(body: BrandMerge, who: Identity = Depends(require_identity)):
+        """Merge one brand into another: all products move, the source brand is removed. EANs are
+        unique per product, so duplicates are excluded automatically."""
+        src = validate.text_or_400(body.from_brand, "from_brand")
+        dst = validate.text_or_400(body.into_brand, "into_brand")
+        with get_conn() as conn:
+            a = repo.get_brand_by_name(conn, src)
+            b = repo.get_brand_by_name(conn, dst)
+            if a is None:
+                raise HTTPException(404, detail=f"no brand named {src!r}")
+            if b is None:
+                raise HTTPException(404, detail=f"no brand named {dst!r}")
+            if int(a["brand_id"]) == int(b["brand_id"]):
+                raise HTTPException(422, detail="pick two different brands")
+            moved = repo.merge_brands(conn, int(a["brand_id"]), int(b["brand_id"]))
+            return {"merged_from": a["name"], "into": b["name"], "products_moved": moved}
 
     @app.get("/currencies")
     def currencies(who: Identity = Depends(require_identity)):

@@ -108,6 +108,26 @@ def test_size_description_is_corrected_on_reimport(client):
     assert client.get(f"/products/{ean}/offers").json()["description"] == "Sensibio H2O"
 
 
+def test_merge_brands_moves_products_and_removes_source(client):
+    s1 = _supplier(client, "Alpha")
+    e1 = make_ean("500000000407"); e2 = make_ean("500000000414")
+    _import(client, s1, "JEAN PAUL GAULTIER", e1, "9.00")
+    _import(client, s1, "J.P. Gaultier", e2, "8.00")
+    before = {b["name"] for b in client.get("/brands").json()}
+    assert {"JEAN PAUL GAULTIER", "J.P. Gaultier"} <= before
+    r = client.post("/brands/merge", json={"from_brand": "J.P. Gaultier", "into_brand": "JEAN PAUL GAULTIER"})
+    assert r.status_code == 200, r.text
+    assert r.json()["products_moved"] == 1
+    names = {b["name"] for b in client.get("/brands").json()}
+    assert "J.P. Gaultier" not in names and "JEAN PAUL GAULTIER" in names
+    # both EANs now live under the kept brand
+    assert client.get(f"/products/{e1}/offers").json()["brand"] == "JEAN PAUL GAULTIER"
+    assert client.get(f"/products/{e2}/offers").json()["brand"] == "JEAN PAUL GAULTIER"
+    # guards
+    assert client.post("/brands/merge", json={"from_brand": "JEAN PAUL GAULTIER", "into_brand": "JEAN PAUL GAULTIER"}).status_code == 422
+    assert client.post("/brands/merge", json={"from_brand": "Nope", "into_brand": "JEAN PAUL GAULTIER"}).status_code == 404
+
+
 def test_add_line_manual_product(client):
     ean = make_ean("500000000056")
     r = client.post("/products", json={"ean": ean, "description": "Hand added", "brand": "Bioderma"})
