@@ -204,6 +204,59 @@ is not part of the recovery story — the three copies above are.)*
 **Proven, not assumed:** a **restore drill** runs on a schedule (same idea as the CRM's `restore_drill.sh`) —
 it loads the newest backup read-only and confirms it's current and parseable.
 
+### 5.1 Creating the off-site backup on BorgBase (restic) — exact steps
+
+This is copy **2** above. It mirrors the CRM's existing **restic → BorgBase** job (EU, append-only key on the
+box, full key off-box); the price DB is just one more path. *(This is the content the README's missing
+`BACKUP_SYSTEM.md` was meant to hold — it lives here until that file exists.)* Placeholders in `<…>`.
+
+**One-time — create the repo (owner, BorgBase web UI):**
+1. Log in to BorgBase (**same account as the CRM**). **Repositories → New Repository**: name `pricedb`,
+   region **EU**, **restic** compatibility, quota as needed. Note the repo URL BorgBase shows for restic
+   (e.g. `rest:https://<REPO_ID>.repo.borgbase.com`) and set a strong **repo password**.
+2. **Two keys, split on purpose** (same as the CRM): give the **server** an **append-only** key — it can *add*
+   snapshots but never delete or prune them, so a compromised box can't wipe history. Keep a **separate
+   full-access key off the server** (password manager) for pruning and restores.
+
+**One-time — on the server (as the `pricedb` user):**
+3. Install restic (match the CRM's pinned version): `sudo apt-get install -y restic`.
+4. Secrets in a **root-owned** env file, never in the repo — `/etc/pricedb/backup.env` (`chmod 600`):
+   ```
+   RESTIC_REPOSITORY=rest:https://<REPO_ID>.repo.borgbase.com
+   RESTIC_PASSWORD=<repo password>
+   ```
+5. **Initialise once with the FULL key** (append-only cannot `init`): `restic init`. Then leave the **server
+   configured with the append-only key** for the nightly job.
+
+**Nightly backup (systemd timer, same shape as the FX timer):**
+6. `/usr/local/bin/pricedb-backup.sh`:
+   ```bash
+   #!/usr/bin/env bash
+   set -euo pipefail
+   set -a; source /etc/pricedb/backup.env; set +a
+   # WAL-safe consistent snapshot first, then back that up
+   sqlite3 /data/pricedb/pricedb.sqlite ".backup '/data/pricedb/pricedb-snap.sqlite'"
+   restic backup /data/pricedb/pricedb-snap.sqlite --tag pricedb --host prices
+   curl -fsS "https://hc-ping.com/<PRICEDB_CHECK_UUID>"   # ping healthchecks.io ONLY on success
+   ```
+   The server job is **backup + success-ping only** — with an append-only key it cannot prune.
+7. `pricedb-backup.service` + `pricedb-backup.timer` (`OnCalendar=*-*-* 02:30`, `User=pricedb`,
+   `Restart=no`); `systemctl enable --now pricedb-backup.timer`.
+8. **Retention** runs **off the box** with the full key (or BorgBase server-side pruning), e.g. monthly from
+   your machine: `restic forget --tag pricedb --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`.
+
+**Monitoring — the email you asked for:**
+9. Create a **healthchecks.io** check "pricedb nightly backup" (period 1 day + grace) and send its alerts to
+   the **same inbox as the CRM backup emails**. A missed or failed night then emails you too — today you only
+   get CRM mails because the price DB isn't wired in yet.
+
+**Restore drill — proven, not assumed (gate E / §7.3):**
+10. `pricedb-restore-drill.sh` (weekly timer): `restic restore latest --tag pricedb --target /tmp/pricedb-drill`,
+    then open the restored `.sqlite` **read-only** and assert the expected tables + a sane row count; ping a
+    **second** healthcheck on success.
+11. Before cutover, do **one manual end-to-end restore**: restore `latest` to a scratch path, point a throwaway
+    app instance (port 8002, `PRICEDB_DB_PATH`) at it, and confirm the grid loads. Only then is copy 2 "proven".
+
 ---
 
 ## 6. Status of decisions
