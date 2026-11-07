@@ -156,6 +156,17 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
   brand's tab shows only that brand's lines (and the Lines count reflects it). `/batches/{id}/offers`
   takes the same `brand=` filter, so the detail view and the export always agree.
 
+### 7b.1 Extract the Offers grid to Excel (comparison dump)
+
+- Separate from the template export above, the Offers toolbar has **⤓ Extract to Excel** (`extractGrid`).
+  It downloads the **current grid exactly as shown** — active brand, search / territory / currency
+  filters, column order, sort and compare mode — as a plain `.xlsx`: columns **EAN, Product**, then
+  **Δ% (B vs A)** in compare mode or **Best price** otherwise, then **one column per supplier offer**.
+- This one is **built in the browser** with the vendored SheetJS, *not* on the server, because it is a
+  plain data dump with **no template styling to preserve** (unlike §7b). Prices are written as real
+  **numbers** in the **display currency** (so Excel can sort/filter them), 2-dp number-formatted.
+- Read-only: it only reads the grid already loaded on screen — no API write, no DB change.
+
 ## 8. Uploading (UX)
 
 - Files can be added with the **Add file** button **and** by **drag-and-drop** — dropping an `.xlsx`

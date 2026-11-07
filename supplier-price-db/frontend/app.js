@@ -232,7 +232,7 @@ let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
 let reqOpen = {};           // customer -> expanded? (request history accordion)
 let _lastReqCusts = [];     // customers in the last-rendered history (for expand/collapse all)
 const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
-let _gridRows = {}, _curCols = [];
+let _gridRows = {}, _curCols = [], _gridProds = [], _gridCols = [], _gridShowDiff = false;
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
 const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [], currencies: ["EUR"] };
 let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null;
@@ -326,6 +326,7 @@ VIEWS.rankings = async function (c, _retried) {
 
   let cols = bs; if (showDiff) cols = [bs.find(b => b.batch_id == cmpA), bs.find(b => b.batch_id == cmpB)];
   _curCols = bs.map(b => b.batch_id);
+  _gridProds = prods; _gridCols = cols; _gridShowDiff = showDiff;   // stash the exact view for Extract to Excel
   if (!prods.length) {
     c.innerHTML = h + `<div class="empty"><div class="ei">▦</div><div>${unknown
       ? "No unknown-brand products. Multi-brand imports drop any EAN with no known brand here; it moves to a brand's tab once a branded offer for that EAN is imported."
@@ -367,6 +368,48 @@ VIEWS.rankings = async function (c, _retried) {
   });
   h += "</tbody></table></div>"; c.innerHTML = h;
 };
+// Download the Offers grid exactly as shown — active brand, search / territory / currency
+// filters, column order, sort and compare mode — as a plain .xlsx: EAN, Product, then either
+// Δ% (in compare mode) or Best price, then one column per supplier offer. Prices are in the
+// display currency, as on screen. This is a data dump (no template styling), so it is built
+// in-browser with the vendored SheetJS, downloaded the same way as the offer-template export.
+function extractGrid() {
+  const prods = _gridProds || [], cols = _gridCols || [];
+  if (!prods.length) { toast("Nothing to extract in this tab."); return; }
+  const cur = display;
+  const priceOf = (row, bid) => (row.prices[bid] != null ? parseFloat(row.prices[bid]) : null);
+  const money = (eur) => (eur == null ? null : +conv(eur).toFixed(2));
+  const colHdr = (b) => b.supplier + " · " + fmtDate(b.received_date) +
+    ((b.kind_label || b.kind) ? " · " + (b.kind_label || b.kind) : "") + (b.ended_at ? " (ended)" : "");
+  const head = ["EAN", "Product", _gridShowDiff ? "Δ% (B vs A)" : "Best (" + cur + ")"].concat(cols.map(colHdr));
+  const aoa = [head];
+  prods.forEach(p => {
+    const r = [p.ean, p.description || ""];
+    if (_gridShowDiff) {
+      const a = priceOf(p, cmpA), b = priceOf(p, cmpB);
+      r.push((a != null && b != null && a > 0) ? +(((b - a) / a) * 100).toFixed(1) : null);
+    } else r.push(money(p.best_eur));
+    cols.forEach(b => r.push(money(priceOf(p, b.batch_id))));
+    aoa.push(r);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = head.map((hd, i) => ({ wch: i === 0 ? 15 : i === 1 ? 36 : Math.max(12, Math.min(34, hd.length + 2)) }));
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  for (let R = 1; R <= range.e.r; R++) for (let C = 2; C <= range.e.c; C++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+    if (cell && cell.t === "n") cell.z = (_gridShowDiff && C === 2) ? '0.0"%"' : "0.00";
+  }
+  const wb = XLSX.utils.book_new();
+  const brand = activeBrand === "__unknown__" ? "Unknown" : (activeBrand || "All");
+  XLSX.utils.book_append_sheet(wb, ws, (brand.slice(0, 31).replace(/[\\/?*\[\]:]/g, "_")) || "Offers");
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const fn = ("offers_" + brand + "_" + today() + ".xlsx").replace(/[^\w.-]+/g, "_");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fn;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  toast("Extracted " + prods.length + " products" + (cur !== "EUR" ? " · " + cur : "") + ".");
+}
 function toolbarHTML(currencies) {
   currencies = currencies || [];
   const showCcy = currencies.length && !(currencies.length === 1 && currencies[0] === "EUR");
@@ -377,6 +420,7 @@ function toolbarHTML(currencies) {
   return `<div class="toolbar" style="justify-content:center">
     <button class="primary" data-act="addfile" data-drop="offer" title="click, or drag an .xlsx onto this button">⬆ Add file <span class="muted" style="font-weight:400;font-size:11px">or drop here</span></button>
     <button data-act="addline">＋ Add line</button>
+    <button data-act="extractgrid" title="download the products and prices shown here as an .xlsx spreadsheet">⤓ Extract to Excel</button>
     <button data-act="mergebrands" title="combine two duplicate brands into one">⇄ Merge brands</button>
     <input id="offSearch" placeholder="🔍 search EAN or description…" value="${esc(searchQ)}" style="width:260px" data-act="search"/>
     <span class="seg"><button class="${terrFilter === "all" ? "on" : ""}" data-act="terr" data-terr="all">All</button>
@@ -1022,6 +1066,7 @@ document.addEventListener("click", e => {
     case "best": toggleBest(ean); break;
     case "addfile": pickFile("addfile", startOfferImport); break;
     case "addline": addLineModal(); break;
+    case "extractgrid": extractGrid(); break;
     case "reqfile": pickFile("reqfile", startRequestUpload); break;
     case "runsrc": runSourcing(); break;
     case "openreq": openRequestDetail(id); break;
