@@ -63,6 +63,17 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
 - Some multi-brand files **have a brand column, some don't.** Detect a brand column when present;
   otherwise classify by EAN against known products. Brand resolution never comes silently from the
   file — see brand approval below.
+- **Opt-in brand-column path (2026-11-07):** in the multi-brand import the wizard shows a
+  **"this file has a brand column"** option — defaulting on when a `BRAND`/`Marca`/`Marque`/… header is
+  auto-detected, with a **column picker** to override which column (or turn it off). Real-file check
+  showed **13 of 14 supplier offers are single-brand with no brand column**; only big distributor lists
+  (e.g. Zwolle, 106 brands) have one — hence opt-in, so single-brand files are never mis-read. Rules when on:
+  - brand read **per row** from the chosen column;
+  - **new brands need approval** before creation (the confirm dialog above); declined names → Unknown;
+  - an EAN **already under another brand → review**, never overwritten, no offer (same as single-brand);
+  - an **empty brand cell** falls back to **EAN match**, then **Unknown** (+ review).
+  Implemented with a `brandOverride` arg on the parser (`parseWorkbook`/`detectCols`) and the existing
+  multi-brand importer path; single-brand imports ignore any brand column entirely.
 - **New-brand approval:** when an import would create brands that don't exist yet, show a confirm
   dialog listing the candidate brands; **only the ticked ones are created** and become real brand
   tabs. (Bug fixed: ticked brands must actually be created.)

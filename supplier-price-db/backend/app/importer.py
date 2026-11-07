@@ -149,7 +149,14 @@ def import_rows(conn, batch_id: int, rows: list[dict], *,
             row_brand_id = repo.get_or_create_brand(conn, row_brand) if row_brand else None
             if existing is not None:
                 pid = int(existing["product_id"])
-                if row_brand_id is not None and existing["brand_id"] is None:
+                existing_brand = existing["brand_id"]
+                # the file names a DIFFERENT brand than the one this EAN is already under -> review,
+                # never overwrite and no offer (same rule as single-brand; §2.5).
+                if row_brand_id is not None and existing_brand is not None and int(existing_brand) != int(row_brand_id):
+                    conflict = repo.brand_name(conn, int(existing_brand)) or "another brand"
+                    review(ean, f"EAN already under brand {conflict} — confirm")
+                    continue
+                if row_brand_id is not None and existing_brand is None:
                     repo.assign_brand(conn, pid, row_brand_id)   # fill a missing brand from the file
                 _backfill_description(conn, ean, existing, row.get("description"))
             elif row_brand_id is not None:

@@ -119,7 +119,7 @@ function colIsMostlySize(sample, c) {
   sample.forEach(r => { const v = r && r[c]; if (v != null && String(v).trim()) { tot++; if (looksSize(v)) sz++; } });
   return tot > 0 && sz >= tot * 0.6;
 }
-function detectCols(hdr) {
+function detectCols(hdr, brandOverride) {
   const L = hdr.map(c => (c == null ? "" : String(c)).trim().toLowerCase());
   let ean = -1, desc = -1, size = -1, ppb = -1; const prices = [];
   const inc = (l, ...n) => n.some(x => l.includes(x));
@@ -136,14 +136,18 @@ function detectCols(hdr) {
   // brand column (used only for multi-brand imports; absent on many files)
   let brand = -1;
   L.forEach((l, i) => { if (brand < 0 && i !== ean && i !== desc && l && (l === "brand" || l === "marque" || l === "marca" || l === "marke" || l === "marchio" || l === "brand name" || inc(l, "brand name"))) brand = i; });
+  if (brandOverride != null) {   // the import wizard's explicit choice overrides auto-detection
+    if (brandOverride === "__none__") brand = -1;
+    else brand = L.findIndex(l => l === String(brandOverride).trim().toLowerCase());
+  }
   return { ean, desc, size, ppb, qty, brand, prices };
 }
-function parseSheetRows(rows) {
+function parseSheetRows(rows, brandOverride) {
   if (!rows.length) return { rows: [], bad: 0, ok: false };
   let hi = 0, bestScore = -1, cols = null;
   // a row that already contains a real EAN is DATA, not a header — so a product name that happens
   // to contain a keyword substring (e.g. "net" in "nettoyant") can't be mistaken for a header row.
-  for (let i = 0; i < Math.min(rows.length, 40); i++) { if ((rows[i] || []).some(looksEan)) continue; const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0) + (c.desc >= 0 ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
+  for (let i = 0; i < Math.min(rows.length, 40); i++) { if ((rows[i] || []).some(looksEan)) continue; const c = detectCols(rows[i] || [], brandOverride); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0) + (c.desc >= 0 ? 1 : 0); if (sc > bestScore) { bestScore = sc; hi = i; cols = c; } }
   const hasHeader = bestScore > 0;
   if (!hasHeader) { hi = 0; cols = { ean: -1, desc: -1, size: -1, ppb: -1, qty: -1, brand: -1, prices: [] }; }
   cols = cols || { ean: -1, desc: -1, size: -1, ppb: -1, qty: -1, brand: -1, prices: [] };
@@ -170,10 +174,29 @@ function parseSheetRows(rows) {
   }
   return { rows: out, bad, ok: true };
 }
-function parseWorkbook(buf) {
+function parseWorkbook(buf, brandOverride) {
   const wb = XLSX.read(buf, { type: "array" }); let all = [], bad = 0, sheets = 0;
-  wb.SheetNames.forEach(n => { const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true }); const r = parseSheetRows(rows); if (r.ok) { all = all.concat(r.rows); bad += r.bad; sheets++; } });
+  wb.SheetNames.forEach(n => { const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true }); const r = parseSheetRows(rows, brandOverride); if (r.ok) { all = all.concat(r.rows); bad += r.bad; sheets++; } });
   return { rows: all, bad, sheets };
+}
+// Peek at a workbook's columns for the import wizard: the header labels of the first table-like sheet
+// and the auto-detected brand column — so the wizard can offer the "brand column" option and a picker.
+function inspectWorkbook(buf) {
+  let wb; try { wb = XLSX.read(buf, { type: "array" }); } catch (e) { return { headers: [], brandLabel: null }; }
+  for (const n of wb.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true });
+    let hi = -1, best = -1, cols = null;
+    for (let i = 0; i < Math.min(rows.length, 40); i++) {
+      if ((rows[i] || []).some(looksEan)) continue;
+      const c = detectCols(rows[i] || []); const sc = (c.ean >= 0 ? 2 : 0) + (c.prices.length ? 1 : 0) + (c.desc >= 0 ? 1 : 0);
+      if (sc > best) { best = sc; hi = i; cols = c; }
+    }
+    if (best > 0 && hi >= 0) {
+      const hdr = (rows[hi] || []).map(v => v == null ? "" : String(v).trim());
+      return { headers: hdr.filter(Boolean), brandLabel: cols.brand >= 0 ? hdr[cols.brand] : null };
+    }
+  }
+  return { headers: [], brandLabel: null };
 }
 // Customer-request file: an EAN column and an OPTIONAL price column. The target comes only from
 // a detected price column (never stray numbers in a description), so an EAN+description file with
@@ -236,7 +259,7 @@ let _gridRows = {}, _curCols = [], _gridProds = [], _gridCols = [], _gridShowDif
 let unkSel = new Set();   // Unknown-brands tab: EANs ticked for bulk brand assignment
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
 const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [], currencies: ["EUR"] };
-let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null;
+let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null, _wizCols = null;
 const _comboOptions = {};   // {inputId: [names]} for the searchable comboboxes
 
 function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (11 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (5 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(102 * gridZoom) + "px"); r.setProperty("--prod-w", Math.round(170 * gridZoom) + "px"); }
@@ -918,6 +941,9 @@ async function fxRefresh() {
 
 // ---------- import wizard ----------
 function openImportWizard(name) {
+  const wc = (() => { try { return inspectWorkbook(new Uint8Array(_pendingBytes || [])); } catch (e) { return { headers: [], brandLabel: null }; } })();
+  _wizCols = wc;
+  const brandColOpts = wc.headers.map(h => `<option value="${esc(h)}" ${wc.brandLabel && h.toLowerCase() === wc.brandLabel.toLowerCase() ? "selected" : ""}>${esc(h)}</option>`).join("");
   const supOpts = store.suppliers.map(s => `<option>${esc(s.name)}</option>`).join("");
   const guess = (name.split(/[_\-. ]/)[0] || "").replace(/[^A-Za-z]/g, "");
   const brandMatch = store.brands.find(b => b.name.toLowerCase() === guess.toLowerCase());
@@ -936,7 +962,15 @@ function openImportWizard(name) {
        <div><div class="fl">Notes (promotion…)</div><input id="iw-notes" placeholder="business info only"/></div>
        <div><div class="fl">Lead time</div><input id="iw-lead" placeholder="e.g. 2-3 weeks"/></div>
        <div><div class="fl">MOQ</div><input id="iw-moq" placeholder="e.g. €25,000 or 6240 pcs"/></div>
-       <div style="grid-column:1/3"><label style="display:flex;gap:8px;align-items:center;font-size:12px"><input type="checkbox" id="iw-perbox" style="width:auto"/> Prices are per box — divide by pieces/box (uses the file’s pcs/box column)</label></div></div>
+       <div style="grid-column:1/3"><label style="display:flex;gap:8px;align-items:center;font-size:12px"><input type="checkbox" id="iw-perbox" style="width:auto"/> Prices are per box — divide by pieces/box (uses the file’s pcs/box column)</label></div>
+       <div id="iw-brandcol-block" style="display:none;grid-column:1/3;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:8px 10px">
+         <label style="display:flex;gap:8px;align-items:center;font-size:12px"><input type="checkbox" id="iw-hasbrand" data-act="toggbrandcol" style="width:auto" ${wc.brandLabel ? "checked" : ""}/> This file has a <b>brand column</b> — read each row’s brand from it (new names need your OK; blank cells fall back to EAN match, then Unknown)</label>
+         <div id="iw-brandcol-pick" style="margin-top:7px;${wc.brandLabel ? "" : "display:none"}">
+           <span class="muted" style="font-size:12px">Brand column: </span>
+           <select id="iw-brandcol" style="max-width:220px">${brandColOpts || '<option value="">(no labelled columns found)</option>'}</select>
+           <span class="muted" style="font-size:11px"> · ${wc.brandLabel ? "auto-detected “" + esc(wc.brandLabel) + "”" : "none auto-detected — pick the column"}</span>
+         </div>
+       </div></div>
      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
        <button data-act="closemodal">Cancel</button><button class="primary" data-act="doimport">Import &amp; compare</button></div></div>`);
 }
@@ -963,8 +997,14 @@ async function doImport() {
     lead_time: document.getElementById("iw-lead").value.trim() || null,
     moq: document.getElementById("iw-moq").value.trim() || null,
   };
+  // Multi-brand brand-column opt-in: when ticked, read each row's brand from the chosen column;
+  // otherwise (and for single-brand) no brand column is read. Single-brand still auto-detects so the
+  // "this looks multi-brand" guard below can warn.
+  const useBrandCol = multibrand && !!((document.getElementById("iw-hasbrand") || {}).checked);
+  const brandColLabel = useBrandCol ? ((document.getElementById("iw-brandcol") || {}).value || "") : "";
+  const brandOverride = multibrand ? (useBrandCol && brandColLabel ? brandColLabel : "__none__") : null;
   let parsed;
-  try { parsed = parseWorkbook(new Uint8Array(_pendingBytes)); }
+  try { parsed = parseWorkbook(new Uint8Array(_pendingBytes), brandOverride); }
   catch (e) { toast("Could not read the file: " + e.message); return; }
   if (!parsed.rows.length) { toast("Could not find an EAN + price table (" + parsed.sheets + " sheet(s) scanned)."); return; }
 
@@ -1156,7 +1196,9 @@ document.addEventListener("keydown", e => {
 document.addEventListener("change", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, id = el.dataset.id;
-  if (act === "togglenew") { const k = el.dataset.k; document.getElementById("iw-" + k + "-new").style.display = el.value === "__new__" ? "block" : "none"; }
+  if (act === "togglenew") { const k = el.dataset.k; document.getElementById("iw-" + k + "-new").style.display = el.value === "__new__" ? "block" : "none";
+    if (k === "brand") { const blk = document.getElementById("iw-brandcol-block"); if (blk) blk.style.display = el.value === "__multi__" ? "block" : "none"; } }
+  else if (act === "toggbrandcol") { const pk = document.getElementById("iw-brandcol-pick"); if (pk) pk.style.display = el.checked ? "block" : "none"; }
   else if (act === "renamesup") { const v = el.value.trim(); if (v) api("PATCH", "/suppliers/" + id, { name: v }).then(loadStore); }
   else if (act === "setcountry") { api("PATCH", "/suppliers/" + id, { country: el.value.trim() }).then(loadStore); }
   else if (act === "setrate") { setRate(el.dataset.cur, el.value); }

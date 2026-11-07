@@ -61,3 +61,65 @@ def test_data_minimisation_only_known_fields_read(conn):
     dumped = " ".join(str(tuple(r)) for r in conn.execute("SELECT * FROM offers"))
     for junk in ("A Person", "rep@example.com", "1234 5678"):
         assert junk not in dumped
+
+
+# ---- multi-brand import with a per-row brand column (§2.5, opt-in brand-column path) ----
+
+def test_multi_new_brand_from_column_creates_product(conn):
+    """An approved new brand on the row files the (unknown) EAN under it, active, no review."""
+    sid = repo.create_supplier(conn, "Dist")
+    bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1", kind="price_list", brand="(multi-brand)")
+    e = make_ean("400000000010")
+    res = importer.import_rows(conn, bid, [{"ean": e, "quoted_price": "5.00", "brand": "Wella"}],
+                               brand_mode="multi")
+    p = repo.get_product_by_ean(conn, e)
+    assert p is not None and repo.brand_name(conn, p["brand_id"]) == "Wella"
+    assert len(res.offer_ids) == 1 and res.review == []
+
+
+def test_multi_cross_brand_goes_to_review_no_overwrite(conn):
+    """An EAN already under BrandA, with the file naming BrandB -> review, no overwrite, no offer."""
+    sid = repo.create_supplier(conn, "Dist")
+    bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1", kind="price_list", brand="(multi-brand)")
+    a = repo.get_or_create_brand(conn, "BrandA")
+    e = make_ean("400000000011")
+    repo.create_product(conn, e, description="X", brand_id=a, status="active")
+    res = importer.import_rows(conn, bid, [{"ean": e, "quoted_price": "9.00", "brand": "BrandB"}],
+                               brand_mode="multi")
+    assert res.offer_ids == []
+    assert any("already under brand BrandA" in r["reason"] for r in res.review)
+    assert repo.brand_name(conn, repo.get_product_by_ean(conn, e)["brand_id"]) == "BrandA"
+
+
+def test_multi_empty_brand_falls_back_to_ean_then_unknown(conn):
+    """An empty brand cell: existing EAN keeps its brand (EAN match); an unknown EAN -> Unknown + review.
+    Prices are kept in both cases."""
+    sid = repo.create_supplier(conn, "Dist")
+    bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1", kind="price_list", brand="(multi-brand)")
+    a = repo.get_or_create_brand(conn, "BrandA")
+    known = make_ean("400000000012")
+    repo.create_product(conn, known, description="K", brand_id=a, status="active")
+    unknown = make_ean("400000000013")
+    res = importer.import_rows(conn, bid, [
+        {"ean": known, "quoted_price": "7.00", "brand": ""},
+        {"ean": unknown, "quoted_price": "8.00", "brand": ""},
+    ], brand_mode="multi")
+    assert repo.brand_name(conn, repo.get_product_by_ean(conn, known)["brand_id"]) == "BrandA"
+    assert repo.get_product_by_ean(conn, unknown)["brand_id"] is None
+    assert any(r["ean"] == unknown and "assign a brand" in r["reason"] for r in res.review)
+    assert len(res.offer_ids) == 2
+
+
+def test_single_brand_ignores_any_row_brand(conn):
+    """A single-brand import (the option OFF / a single-brand file) is unaffected by a brand on the row:
+    everything is filed under the picked brand, and the row's brand is never created."""
+    sid = repo.create_supplier(conn, "S")
+    bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1", kind="price_list", brand="OnlyBrand")
+    only = repo.get_or_create_brand(conn, "OnlyBrand")
+    e = make_ean("400000000014")
+    res = importer.import_rows(conn, bid,
+                               [{"ean": e, "quoted_price": "5.00", "brand": "SomethingElse"}],
+                               brand_id=only)
+    assert len(res.offer_ids) == 1 and res.review == []
+    assert repo.brand_name(conn, repo.get_product_by_ean(conn, e)["brand_id"]) == "OnlyBrand"
+    assert repo.get_brand_by_name(conn, "SomethingElse") is None
