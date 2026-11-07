@@ -1,6 +1,6 @@
-# prices.rivieraessentials.com — stand-up runbook (Cloudflare Access + tunnel route)
+# db.rivieraessentials.com — stand-up runbook (Cloudflare Access + tunnel route)
 
-Puts the price DB online at **`prices.rivieraessentials.com`**, behind the **same Cloudflare Access login
+Puts the price DB online at **`db.rivieraessentials.com`**, behind the **same Cloudflare Access login
 as the CRM**, through the **same Cloudflare Tunnel** — with **two sign-in emails** (your main + a Gmail
 backup on a different provider) and the Gmail also a **second admin** on the Cloudflare account.
 
@@ -46,11 +46,11 @@ Cloudflare **Zero Trust** → **Access → Applications**.
 **A2.** **Add an application → Self-hosted.**
 - Application name: `Riviera Price DB`.
 - Session duration: match the CRM's (e.g. 24h).
-- **Public hostname:** subdomain `prices`, domain `rivieraessentials.com` (path blank).
+- **Public hostname:** subdomain `db`, domain `rivieraessentials.com` (path blank).
 - **Policies:** attach the **`Riviera owners`** policy from A1.
 - Save.
 
-✅ The Access app now guards `prices.rivieraessentials.com`. **There is still no DNS record and no tunnel
+✅ The Access app now guards `db.rivieraessentials.com`. **There is still no DNS record and no tunnel
 route**, so the hostname resolves to nothing yet — exactly what we want until Access is in place.
 
 **A3. (apply the same policy to the CRM, so it's one shared rule)** Open the existing **CRM** Access
@@ -76,7 +76,7 @@ codes** (password manager + sealed offline copy — see the recovery checklist i
 
 ## Part C — Add the tunnel ingress rule for the subdomain  **[on the server]**
 
-This points `prices.rivieraessentials.com` at the price DB on `:8001`, **before** the catch‑all `404`.
+This points `db.rivieraessentials.com` at the price DB on `:8001`, **before** the catch‑all `404`.
 It writes a dated backup of `config.yml` first and rewrites it to the exact content below (tiny file).
 
 ```bash
@@ -87,7 +87,7 @@ credentials-file: /etc/cloudflared/75e6d371-cfea-4fa9-815d-947e541e1909.json
 ingress:
   - hostname: crm.rivieraessentials.com
     service: http://127.0.0.1:8000
-  - hostname: prices.rivieraessentials.com
+  - hostname: db.rivieraessentials.com
     service: http://127.0.0.1:8001
   - service: http_status:404
 YML
@@ -97,9 +97,9 @@ echo WRITTEN'
 
 **C2. Validate the config before it's applied** (changes nothing live):
 ```bash
-ssh tedj@178.105.34.50 'cloudflared tunnel ingress validate && echo "--- route check ---" && cloudflared tunnel ingress rule https://prices.rivieraessentials.com'
+ssh tedj@178.105.34.50 'cloudflared tunnel ingress validate && echo "--- route check ---" && cloudflared tunnel ingress rule https://db.rivieraessentials.com'
 ```
-- ✅ You should see the config is **valid**, and the rule check resolves `prices.rivieraessentials.com` to
+- ✅ You should see the config is **valid**, and the rule check resolves `db.rivieraessentials.com` to
   `http://127.0.0.1:8001`. **If validation fails, do NOT restart cloudflared** — restore the backup
   (`sudo cp /etc/cloudflared/config.yml.bak.* /etc/cloudflared/config.yml`) and tell Claude Code.
 
@@ -108,12 +108,12 @@ ssh tedj@178.105.34.50 'cloudflared tunnel ingress validate && echo "--- route c
 ## Part D — Add the DNS route for the subdomain  **[you — Cloudflare dashboard]**
 
 **D1.** **DNS → Records → Add record:**
-- Type **CNAME**, Name **`prices`**,
+- Type **CNAME**, Name **`db`**,
 - Target **`75e6d371-cfea-4fa9-815d-947e541e1909.cfargotunnel.com`**,
 - **Proxied** (orange cloud) — this is what makes Cloudflare (and therefore Access) sit in front.
 - Save.
 
-✅ `prices.rivieraessentials.com` now resolves through Cloudflare. Because Part A is already in place, the
+✅ `db.rivieraessentials.com` now resolves through Cloudflare. Because Part A is already in place, the
 very first request is gated by the Access login. *(The route won't carry traffic to the app until Part E
 applies the new ingress — so order D then E, or E then D; both end in the same place. Access is enforced
 either way.)*
@@ -149,7 +149,7 @@ ssh -t tedj@178.105.34.50 'sudo systemctl restart cloudflared && sleep 3 && syst
 ## Part F — Verify  **[you — browser + a couple of server checks]**
 
 **F1. Access login appears (private window):** open a **private/incognito** window →
-`https://prices.rivieraessentials.com`.
+`https://db.rivieraessentials.com`.
 - ✅ You see the **Cloudflare Access login**, not the app and not an error. (If the app isn't built yet,
   after logging in you'll see a `502` — that's expected; Access + routing are proven.)
 
@@ -168,7 +168,7 @@ ssh tedj@178.105.34.50 'curl -s http://127.0.0.1:8000/healthz'
 ```bash
 ssh tedj@178.105.34.50 'curl -s http://127.0.0.1:8001/healthz'
 ```
-- ✅ `ok`, and `prices.rivieraessentials.com` shows the app after login.
+- ✅ `ok`, and `db.rivieraessentials.com` shows the app after login.
 
 ---
 
@@ -180,7 +180,7 @@ ssh -t tedj@178.105.34.50 'sudo cp "$(ls -t /etc/cloudflared/config.yml.bak.* | 
 ```
 - ✅ `ok` — the CRM is back on the original single‑hostname config.
 
-**R2. [you — dashboard]** delete the `prices` **CNAME** (DNS → Records). Optionally delete the
+**R2. [you — dashboard]** delete the `db` **CNAME** (DNS → Records). Optionally delete the
 `Riviera Price DB` **Access application** (harmless to leave; with no DNS it guards nothing). Leave the
 `Riviera owners` policy and the second admin member in place — those are improvements worth keeping.
 
@@ -205,7 +205,7 @@ forgotten.
 Apply at server setup (step D), verify at the Security gate (step E):
 
 1. **Identity is now enforced in code too** (no longer just the tunnel). Set in `config.toml` on the server:
-   `[server] environment = "production"`, `public_origin = "https://prices.rivieraessentials.com"`;
+   `[server] environment = "production"`, `public_origin = "https://db.rivieraessentials.com"`;
    `[access] enabled = true`, `team_name`, `aud_tag`; `[identity] allowed_emails = [MAIN, BACKUP]`. The app
    **refuses to start** if any of these is missing in production (`config.check_production_security()`), so a
    misconfigured box fails closed instead of serving data unauthenticated.

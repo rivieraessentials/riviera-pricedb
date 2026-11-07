@@ -26,7 +26,7 @@ finally:
 PY
 
 # 2) Push ONLY the snapshot off-site (append-only key allows backup, not forget/prune).
-restic backup "$SNAP" --tag pricedb --host prices
+restic backup "$SNAP" --tag pricedb --host db
 
 # 3) Success ping so a missed/failed night alerts you by email (healthchecks.io). Optional.
 if [ -n "${HEALTHCHECK_URL:-}" ]; then curl -fsS --retry 3 "$HEALTHCHECK_URL" >/dev/null || true; fi

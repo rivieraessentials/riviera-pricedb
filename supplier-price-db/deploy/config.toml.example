@@ -13,7 +13,7 @@
 host = "127.0.0.1"            # localhost ONLY; Cloudflare's tunnel fronts it, never expose directly
 port = 8001
 environment = "production"    # turns the security gate ON (see above)
-public_origin = "https://prices.rivieraessentials.com"   # used for the Origin/CSRF check on writes
+public_origin = "https://db.rivieraessentials.com"   # used for the Origin/CSRF check on writes
 allowed_origins = []          # leave empty unless you have a real second origin
 
 [database]

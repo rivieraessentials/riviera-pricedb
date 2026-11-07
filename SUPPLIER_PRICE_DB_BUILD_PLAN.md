@@ -43,7 +43,7 @@ login**, and looks like part of the same system. But it is its **own app with it
                  you (one login, Cloudflare Access)
                               │
                  ┌────────────┴─────────────┐
-   crm.rivieraessentials.com        prices.rivieraessentials.com
+   crm.rivieraessentials.com        db.rivieraessentials.com
             │                                   │
      CRM FastAPI  :8000                 Price-DB FastAPI  :8001     ← same box, different port
             │                                   │
@@ -140,13 +140,13 @@ Switch the prototype's screens from browser `localStorage` to the `:8001` API �
 **No baked-data migration:** real pricing enters via Phase 2 ingestion; dev/demos use **synthetic data only**.
 Add the **"End offer"** action on stock offers and the **display-only MOQ** column (design §8). The currency
 toggle shows EUR by default with the original currency alongside (design §4.2). *Done when:* you open
-`prices.rivieraessentials.com` and every screen (Offers, Best sellers, Requests, Suppliers, Settings) works
+`db.rivieraessentials.com` and every screen (Offers, Best sellers, Requests, Suppliers, Settings) works
 against the server.
 
 **Phase 4 — Backups, off-site, and offline downloads (the "never lose it" phase).** *(details in §5)*
 
 **Phase 5 — Cutover (subdomain live + both apps under systemd).**
-Stand up `prices.rivieraessentials.com` per [SUBDOMAIN_SETUP_RUNBOOK.md](SUBDOMAIN_SETUP_RUNBOOK.md)
+Stand up `db.rivieraessentials.com` per [SUBDOMAIN_SETUP_RUNBOOK.md](SUBDOMAIN_SETUP_RUNBOOK.md)
 (Access policy first, then tunnel route — the one brief cloudflared restart scheduled for a quiet evening),
 put **both** apps under systemd, and confirm the live URL and the CRM still work. From here, changes are the
 easy one-file redeploys of §0.
@@ -254,7 +254,7 @@ box, full key off-box); the price DB is just one more path. *(This is the conten
    set -a; source /etc/pricedb/backup.env; set +a
    # WAL-safe consistent snapshot first, then back that up
    sqlite3 /data/pricedb/pricedb.sqlite ".backup '/data/pricedb/pricedb-snap.sqlite'"
-   restic backup /data/pricedb/pricedb-snap.sqlite --tag pricedb --host prices
+   restic backup /data/pricedb/pricedb-snap.sqlite --tag pricedb --host db
    curl -fsS "https://hc-ping.com/<PRICEDB_CHECK_UUID>"   # ping healthchecks.io ONLY on success
    ```
    The server job is **backup + success-ping only** — with an append-only key it cannot prune.
@@ -286,7 +286,7 @@ BorgBase repo once access is recovered, or the fallback of adding the price DB t
 (needs CRM approval first). Security gate marks off-site **DEFERRED — BorgBase access pending** and tests
 restore from the local snapshot + a downloaded bundle instead (§5.1, `deploy/SECURITY_GATE.md` §5).
 
-**Decided (2026-10-31):** address = **`prices.rivieraessentials.com`**; file types **.xlsx/.xls/.csv**
+**Decided (2026-10-31):** address = **`db.rivieraessentials.com`**; file types **.xlsx/.xls/.csv**
 (SheetJS self-hosted + SRI, Apache-2.0); offline copy = **download button + weekly reminder**; **systemd for the
 price DB** (CRM supervision referenced to Stage 1 Part D); two Access emails + Gmail as second Cloudflare admin;
 money as **integer minor units at 6 decimals / ×1,000,000**, FX rates **as TEXT** (Python `Decimal`), derived
@@ -315,7 +315,7 @@ EUR/per-piece **computed on read** (design §12 O5); **data minimisation — no 
 **Decided (go-live, 2026-11-07):**
 - **Backups:** the price DB gets its **own BorgBase repository + its own timer**; the CRM nightly restic
   job is **unchanged** (deploy `restic-crm-change.md`, Option 1).
-- **Only CRM-touching step at cutover:** adding `prices.rivieraessentials.com` to
+- **Only CRM-touching step at cutover:** adding `db.rivieraessentials.com` to
   `/etc/cloudflared/config.yml`, applied by **`systemctl restart cloudflared`**. Cloudflare's official
   docs document a **restart** (not a reload) for config changes, and the installed unit has no
   `ExecReload`, so plan on **~a few seconds of CRM downtime** while the shared tunnel bounces — hence the

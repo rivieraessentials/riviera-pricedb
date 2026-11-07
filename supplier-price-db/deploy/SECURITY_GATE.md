@@ -2,7 +2,7 @@
 
 **Who runs this:** a reviewer (human or an agent) who **did not write this code**. Do not let the author
 drive it. **When:** after the server setup is complete and the app is reachable at
-`https://prices.rivieraessentials.com`, **before** real use (cutover). **Goal:** confirm the measures
+`https://db.rivieraessentials.com`, **before** real use (cutover). **Goal:** confirm the measures
 below are actually in force on the *running server*, not just present in the source.
 
 **How to report:** for each item, give a verdict — **PASS**, **FAIL**, or **N/A** — with the evidence
@@ -12,7 +12,7 @@ item is PASS**. Any FAIL blocks cutover until fixed and re-checked.
 ---
 
 ## 1. Authentication is really on (highest priority)
-- [ ] **Access gate present.** In a fresh private browser, `https://prices.rivieraessentials.com` shows
+- [ ] **Access gate present.** In a fresh private browser, `https://db.rivieraessentials.com` shows
       the **Cloudflare Access login** before any app HTML. PASS = you cannot see the app without logging in.
 - [ ] **Only allow-listed emails get in.** Logging in with an email **not** in the allow-list is refused.
 - [ ] **App enforces identity in code too (defence in depth).** A direct request to the origin that bypasses

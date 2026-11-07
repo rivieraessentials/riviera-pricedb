@@ -8,7 +8,7 @@ port = 8001
 environment = "development"   # 'development' | 'production' (controls dev-only defaults, e.g. Access OFF)
 # In PRODUCTION the app refuses to start unless Access is ON (below) with a team + AUD tag, the email
 # allow-list is non-empty, AND public_origin is set (used for the Origin/CSRF check on writes).
-public_origin = ""       # e.g. "https://prices.rivieraessentials.com" — required in production
+public_origin = ""       # e.g. "https://db.rivieraessentials.com" — required in production
 allowed_origins = []     # extra origins allowed to make state-changing calls (usually none)
 
 [database]

@@ -2,7 +2,7 @@
 
 Standalone supplier price database for Riviera Essentials. Products are keyed by
 **EAN** so the data links back to the CRM without duplicating customer or supplier
-records. Hosted separately from the CRM (planned: `prices.rivieraessentials.com`,
+records. Hosted separately from the CRM (planned: `db.rivieraessentials.com`,
 behind Cloudflare Access).
 
 **Data minimisation:** this repo and its database hold **business data only** —

@@ -92,7 +92,7 @@ nano ~/pricedb/config.toml                  # fill placeholders; set path = "/ho
 chmod 600 ~/pricedb/config.toml
 ```
 
-In the config set: `environment = "production"`, `public_origin = "https://prices.rivieraessentials.com"`,
+In the config set: `environment = "production"`, `public_origin = "https://db.rivieraessentials.com"`,
 `[access] enabled = true` with `team_name` + `aud_tag`, and both `allowed_emails`.
 You get `team_name` + `aud_tag` from Cloudflare in Step 6 — you can fill them now if you already created
 the Access app, or do Step 6 first and come back. The app **won't start** in production until they're set.
@@ -219,7 +219,7 @@ Do the existing [`../../SUBDOMAIN_SETUP_RUNBOOK.md`](../../SUBDOMAIN_SETUP_RUNBO
 put both into `config.toml` (Step 2) and `sudo systemctl restart pricedb.service` (Path A) /
 `systemctl --user restart pricedb.service` (Path B) so the app's own JWT check matches.
 
-**The one and only change that touches the CRM** is adding the `prices.rivieraessentials.com` ingress
+**The one and only change that touches the CRM** is adding the `db.rivieraessentials.com` ingress
 line to `/etc/cloudflared/config.yml` and applying it with **`sudo systemctl restart cloudflared`**.
 Cloudflare's official docs document a **restart** (not a reload) as the way to load config changes:
 > "If you add IP routes or otherwise change the configuration, restart the service to load the new
@@ -244,13 +244,13 @@ systemctl show cloudflared -p ExecReload
 **⟵ CHECKPOINT:** after Part F, paste the result of its F4 health check and confirm the CRM still loads.
 
 *Rollback:* the subdomain runbook's **Rollback (R1/R2)** — restore the previous tunnel config + reload,
-delete the `prices` DNS record. ~1 minute; the CRM is unaffected by removing the new hostname.
+delete the `db` DNS record. ~1 minute; the CRM is unaffected by removing the new hostname.
 
 ---
 
 ## Step 7 — Smoke test on the live URL
 
-In a private window at `https://prices.rivieraessentials.com`, after the Access login:
+In a private window at `https://db.rivieraessentials.com`, after the Access login:
 - [ ] The Offers screen loads; brands/suppliers counts look right.
 - [ ] Import one real supplier file (regular + a non-EUR one if you have it); review queue behaves.
 - [ ] Best price, currency toggle, End offer, sourcing, two-offer compare all work.
