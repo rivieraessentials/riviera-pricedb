@@ -287,6 +287,14 @@ EUR/per-piece **computed on read** (design §12 O5); **data minimisation — no 
 - **FX default** (O4): **today's rate**, original currency always shown; manual override wins.
 - **Originals** (O7): **not kept** — parse and discard; checksum-only dedupe.
 
+**Decided (go-live, 2026-11-07):**
+- **Backups:** the price DB gets its **own BorgBase repository + its own timer**; the CRM nightly restic
+  job is **unchanged** (deploy `restic-crm-change.md`, Option 1).
+- **Only CRM-touching step at cutover:** adding `prices.rivieraessentials.com` to
+  `/etc/cloudflared/config.yml`, applied by a cloudflared **reload** (no tunnel drop, ideally zero CRM
+  downtime); a **restart** is the fallback only, ~a few seconds' CRM blip — hence the quiet evening. No
+  CRM data or uvicorn change.
+
 **Still open:** none. All of O1–O7 are decided (design §12). Migration **`0003_decided_schema`** brought the
 Phase-1 schema to the decided model (reversible, with its `.down.sql`); any later schema change is another
 numbered migration (§0). **Phases 1–5 can proceed.**

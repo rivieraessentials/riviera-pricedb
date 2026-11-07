@@ -175,6 +175,10 @@ systemctl --user status pricedb.service --no-pager
 
 ## Step 5 — Off-site backup (BorgBase/restic) + restore drill
 
+> **Decided 2026-11-07:** the price DB gets its **own BorgBase repository and its own timer** — the
+> CRM nightly job is untouched (see [`restic-crm-change.md`](restic-crm-change.md), Option 1). So this
+> step creates a *new* repo and enables the price-DB timers only; there is nothing to change on the CRM.
+
 Follow **build plan §5.1** ([`../../SUPPLIER_PRICE_DB_BUILD_PLAN.md`](../../SUPPLIER_PRICE_DB_BUILD_PLAN.md))
 for creating the BorgBase repo + the append-only/full key split. Then wire the scripts:
 
@@ -226,6 +230,13 @@ Do the existing [`../../SUBDOMAIN_SETUP_RUNBOOK.md`](../../SUBDOMAIN_SETUP_RUNBO
 **Part F** (verify). From Part A you get the `aud_tag`; the `team_name` is your Zero Trust team slug —
 put both into `config.toml` (Step 2) and `sudo systemctl restart pricedb.service` (Path A) /
 `systemctl --user restart pricedb.service` (Path B) so the app's own JWT check matches.
+
+**The one and only change that touches the CRM** is Part C+E: adding the `prices.rivieraessentials.com`
+ingress line to `/etc/cloudflared/config.yml` and applying it. Apply it with a **reload** (Part E1,
+`SIGHUP`) — cloudflared picks up the new hostname **without dropping the tunnel**, so ideally the CRM
+sees **no** downtime. A full **restart** (Part E2) is only the fallback if the reload doesn't take, and
+that's the few-seconds CRM blip — which is why Part E is scheduled for a **quiet evening**. Nothing else
+on the CRM changes: not its uvicorn, not its data, not its backup job.
 
 **⟵ CHECKPOINT:** after Part F, paste the result of its F4 health check and confirm the CRM still loads.
 

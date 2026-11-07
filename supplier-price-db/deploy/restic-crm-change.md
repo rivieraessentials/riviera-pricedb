@@ -1,5 +1,9 @@
 # What changes in the existing CRM nightly restic job (and nothing else)
 
+> **DECIDED 2026-11-07: Option 1.** The price DB gets its **own BorgBase repository and its own
+> backup timer**. The CRM's nightly restic job is **not changed at all** — same repo, keys,
+> schedule, retention, and paths. Option 2 below is kept only for reference.
+
 The price DB reuses the **same restic → BorgBase** mechanism the CRM already runs. Two ways to wire
 it in — pick ONE. Either way, **the only change to the CRM side is adding one more source path to
 the nightly backup**: a *consistent SQLite snapshot* of the price DB, **not** the live DB file.
@@ -15,7 +19,7 @@ Current CRM nightly job (per the operating-rules note), unchanged in spirit:
 
 ---
 
-## Option 1 (recommended): keep the price DB on its OWN timer, leave the CRM job untouched
+## Option 1 — CHOSEN (2026-11-07): keep the price DB on its OWN timer, leave the CRM job untouched
 
 Nothing in the CRM job changes at all. The price DB gets its **own** `pricedb-backup.timer`
 (provided in `deploy/systemd/`), its **own** BorgBase repo, and its **own** healthcheck. This is the
