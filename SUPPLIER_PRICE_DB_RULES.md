@@ -170,6 +170,20 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
   **numbers** (so Excel can sort/filter them), 2-dp number-formatted.
 - Read-only: it only reads the grid already loaded on screen — no API write, no DB change.
 
+### 7b.2 Download the whole database as Excel (one sheet per brand)
+
+- Settings has **⤓ Download database (Excel)** (`GET /export/workbook`, `export.build_workbook`): the
+  **entire database** in grid shape — **one worksheet per brand** (plus an **Unknown** sheet for
+  not-yet-assigned products), a **row per product**, and **one column per LIVE supplier offer**.
+- Same money rule as §7b.1: each **supplier column is in the offer's own currency** (native price),
+  the currency named in the column header; a **Best (EUR)** column carries the cross-currency best.
+  Built **server-side with openpyxl** (reuses `repo.brand_grid` per brand), prices as 2-dp numbers,
+  header row bold/filled, panes frozen at `C2`.
+- This is the **human-readable "download the database"** export. The separate **backup archive**
+  (`GET /export`, `build_bundle`: SQLite snapshot + CSVs) is for **restoring after a crash**, not for
+  reading — the Settings UI labels them that way. Excel-illegal control chars are stripped on write;
+  sheet titles are sanitised to ≤31 chars and de-duplicated.
+
 ## 8. Uploading (UX)
 
 - Files can be added with the **Add file** button **and** by **drag-and-drop** — dropping an `.xlsx`

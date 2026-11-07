@@ -188,6 +188,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                         headers={"Content-Disposition":
                                  f'attachment; filename="pricedb-export-{stamp}.zip"'})
 
+    # ---- full database as a readable Excel workbook: one sheet per brand, products x suppliers ----
+    @app.get("/export/workbook")
+    def export_workbook(who: Identity = Depends(require_identity)):
+        with get_conn() as conn:
+            data = export.build_workbook(conn)
+        stamp = _date.today().isoformat()
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="pricedb-{stamp}.xlsx"'})
+
     # ---- read a product's offer history ----
     @app.get("/products/{ean}/offers", response_model=ProductOffersOut)
     def product_offers(ean: str, who: Identity = Depends(require_identity)):

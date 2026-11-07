@@ -592,9 +592,11 @@ VIEWS.settings = async function (c) {
   Object.keys(fx.rates || {}).sort().forEach(cu => h += `<tr><td><b>${esc(cu)}</b></td><td class="num"><input type="number" step="0.0001" value="${esc(fx.rates[cu])}" data-act="setrate" data-cur="${esc(cu)}" style="width:140px;text-align:right"/></td></tr>`);
   if (!Object.keys(fx.rates || {}).length) h += '<tr><td colspan=2><div class="empty">No rates yet — “Fetch today’s rates”, or add one by hand.</div></td></tr>';
   h += '</tbody></table>';
-  h += `<div class="card" style="margin-top:16px"><div class="card-title">Offline export</div>
-    <div class="alert alert-amber">The export bundle contains the <b>full database</b>. Save it only to the encrypted drive.</div>
-    <a href="/export" download><button class="success">⤓ Download database + CSV bundle</button></a></div>`;
+  h += `<div class="card" style="margin-top:16px"><div class="card-title">Download the database</div>
+    <div class="muted" style="margin-bottom:10px;line-height:1.55">A readable Excel workbook — <b>one sheet per brand</b>, a row per product, and <b>one column per supplier offer</b> (each in its own currency) plus a Best (EUR) column. This is the full database in the same shape as the Offers screen.</div>
+    <a href="/export/workbook" download><button class="success">⤓ Download database (Excel)</button></a>
+    <div class="alert alert-amber" style="margin-top:16px">The backup archive below contains the <b>full database</b> (SQLite + CSV) — it's for restoring after a crash, not for reading. Save it only to the encrypted drive.</div>
+    <a href="/export" download><button>⤓ Download backup archive (SQLite + CSV)</button></a></div>`;
   c.innerHTML = h;
 };
 

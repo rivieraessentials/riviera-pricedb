@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 import sqlite3
 import tempfile
 import zipfile
@@ -17,6 +18,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import openpyxl
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from . import money, offer_types
 
@@ -144,4 +148,104 @@ def build_bundle(conn, db_path: str) -> bytes:
                    "offers.csv       : every offer line; EUR computed at each batch's rate\n"
                    "current_best.csv : cheapest live offer per product\n\n"
                    "Business data only — no personal data (design 2.8).\n")
+    return out.getvalue()
+
+
+# ------------------------------------------------------------------ full-database workbook
+# The human-readable "download the database" export: the on-screen Offers grid for EVERY brand,
+# one worksheet per brand (rows = products, columns = live supplier offers in each offer's own
+# currency, plus a Best-EUR column). build_bundle above is the technical restore archive; this is
+# the one the owner opens in Excel to read the actual product lines and prices.
+_HEADER_FONT = Font(bold=True)
+_HEADER_FILL = PatternFill("solid", fgColor="E8EEF7")
+
+
+def _clean(v):
+    """Strip characters Excel forbids in cell text (control chars); leave non-strings alone."""
+    return ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v
+
+
+def _sheet_title(name: str, used: set[str]) -> str:
+    """A valid, unique Excel worksheet title: <=31 chars, none of []:*?/\\, never blank."""
+    name = ILLEGAL_CHARACTERS_RE.sub("", name or "")
+    base = (re.sub(r"[\[\]:*?/\\]", " ", name).strip() or "Sheet")[:31]
+    title, n = base, 2
+    while title.lower() in used:
+        suffix = f" ({n})"
+        title = base[:31 - len(suffix)] + suffix
+        n += 1
+    used.add(title.lower())
+    return title
+
+
+def _col_header(b: dict) -> str:
+    """Supplier · date · offer type · currency (+ '(ended)'), matching the grid's column header."""
+    kl = offer_types.kind_label(b.get("kind")) or b.get("kind")
+    parts = [b.get("supplier"), b.get("received_date"), kl, (b.get("currency") or "EUR")]
+    head = " · ".join(str(p) for p in parts if p)
+    return head + (" (ended)" if b.get("ended_at") else "")
+
+
+def _num(v):
+    if v in (None, ""):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_grid_sheet(ws, batches: list[dict], rows: list[dict]) -> None:
+    header = ["EAN", "Product", "Best (EUR)"] + [_clean(_col_header(b)) for b in batches]
+    ws.append(header)
+    for cell in ws[1]:
+        cell.font = _HEADER_FONT
+        cell.fill = _HEADER_FILL
+        cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for r in rows:
+        line = [_clean(r["ean"]), _clean(r.get("description") or ""), _num(r.get("best_eur"))]
+        for b in batches:
+            bid = b["batch_id"]
+            orig = r.get("orig") or {}
+            prices = r.get("prices") or {}
+            # each supplier column keeps the offer's OWN currency: orig is the native per-piece
+            # price (for a EUR offer it already equals the EUR value); fall back to the EUR price.
+            native = orig.get(bid)
+            if native is None:
+                native = prices.get(bid)
+            line.append(_num(native))
+        ws.append(line)
+    last = ws.max_row
+    for col in range(3, 4 + len(batches)):           # C .. last: price columns -> 2dp numbers
+        for row in range(2, last + 1):
+            cell = ws.cell(row=row, column=col)
+            if isinstance(cell.value, (int, float)):
+                cell.number_format = "0.00"
+    ws.column_dimensions["A"].width = 15
+    ws.column_dimensions["B"].width = 40
+    ws.column_dimensions["C"].width = 12
+    for i, b in enumerate(batches):
+        ws.column_dimensions[get_column_letter(4 + i)].width = max(14, min(32, len(_col_header(b)) + 2))
+    ws.freeze_panes = "C2"
+
+
+def build_workbook(conn) -> bytes:
+    """xlsx bytes of the whole database in grid shape: one worksheet per brand (plus an 'Unknown'
+    sheet for not-yet-assigned products), each a product-by-supplier price grid like the UI."""
+    from . import repo
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    used: set[str] = set()
+    for br in repo.list_brands(conn):
+        batches, rows, _ = repo.brand_grid(conn, int(br["brand_id"]))
+        if not rows:
+            continue
+        _write_grid_sheet(wb.create_sheet(_sheet_title(br["name"], used)), batches, rows)
+    batches, rows, _ = repo.brand_grid(conn, None)   # Unknown bucket, last
+    if rows:
+        _write_grid_sheet(wb.create_sheet(_sheet_title("Unknown", used)), batches, rows)
+    if not wb.sheetnames:
+        wb.create_sheet("No data")
+    out = io.BytesIO()
+    wb.save(out)
     return out.getvalue()

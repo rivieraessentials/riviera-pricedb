@@ -4,6 +4,8 @@ import io
 import sqlite3
 import zipfile
 
+import openpyxl
+
 from app import db, export, repo
 from app.importer import import_rows
 from app.offer_types import REGULAR
@@ -56,3 +58,49 @@ def test_export_endpoint_returns_zip(client):
     assert r.headers["content-type"] == "application/zip"
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     assert {"offers.csv", "current_best.csv", "pricedb.sqlite"} <= set(zf.namelist())
+
+
+def test_build_workbook_one_sheet_per_brand_native_currency(tmp_path):
+    path = str(tmp_path / "w.db")
+    conn = db.connect(path)
+    db.migrate(conn)
+    bx = repo.get_or_create_brand(conn, "BrandX")
+    ean = make_ean("700000000003")
+    acme = repo.create_supplier(conn, "Acme")                        # USD offer: 10.00 / 1.25 = 8.00 EUR
+    b1 = repo.create_batch(conn, acme, "USD", fx_rate_eur="1.25", kind=REGULAR,
+                           received_date="2026-11-01", brand="BrandX")
+    import_rows(conn, b1, [{"ean": ean, "quoted_price": "10.00", "description": "Thing"}], brand_id=bx)
+    zeta = repo.create_supplier(conn, "Zeta")                        # EUR offer: 9.00
+    b2 = repo.create_batch(conn, zeta, "EUR", fx_rate_eur="1", kind=REGULAR,
+                           received_date="2026-11-02", brand="BrandX")
+    import_rows(conn, b2, [{"ean": ean, "quoted_price": "9.00", "description": "Thing"}], brand_id=bx)
+
+    wb = openpyxl.load_workbook(io.BytesIO(export.build_workbook(conn)))
+    conn.close()
+
+    assert "BrandX" in wb.sheetnames
+    ws = wb["BrandX"]
+    header = [c.value for c in ws[1]]
+    assert header[:3] == ["EAN", "Product", "Best (EUR)"]
+    assert any("Acme" in h and "USD" in h for h in header[3:])       # a column per offer, currency named
+    assert any("Zeta" in h and "EUR" in h for h in header[3:])
+    row = next(r for r in ws.iter_rows(min_row=2, values_only=True) if r[0] == ean)
+    assert row[2] == 8.0                                             # Best is the cheaper EUR
+    cells = {header[i]: row[i] for i in range(3, len(header))}
+    assert next(v for h, v in cells.items() if "Acme" in h) == 10.0  # NATIVE USD, not the 8.00 conversion
+    assert next(v for h, v in cells.items() if "Zeta" in h) == 9.0
+
+
+def test_export_workbook_endpoint_returns_xlsx(client):
+    supplier = client.post("/suppliers", json={"name": "Acme"}).json()
+    batch = client.post("/batches", json={"supplier_id": supplier["supplier_id"],
+                                          "currency": "EUR", "kind": "price_list",
+                                          "brand": "BrandX", "fx_rate_eur": "1"}).json()
+    client.post("/offers", json={
+        "batch_id": batch["batch_id"], "brand_mode": "single", "brand": "BrandX",
+        "offers": [{"ean": make_ean("700000000004"), "quoted_price": "5.00", "description": "Y"}]})
+    r = client.get("/export/workbook")
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert "BrandX" in wb.sheetnames
