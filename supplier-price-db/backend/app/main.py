@@ -30,6 +30,20 @@ from .security import SecurityMiddleware
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 
 
+def _brand_line_filter(conn, brand: str | None) -> tuple[str, list]:
+    """SQL fragment + params to restrict a batch's offer lines to one brand (used by the offer
+    detail view and the export). '' means all lines; '__unknown__' means products with no brand.
+    So a multi-brand supplier offer is shown and exported as just the brand being viewed."""
+    if brand == "__unknown__":
+        return " AND p.brand_id IS NULL", []
+    if brand:
+        br = repo.get_brand_by_name(conn, brand)
+        if br is None:
+            raise HTTPException(404, detail=f"brand {brand!r} not found")
+        return " AND p.brand_id = ?", [int(br["brand_id"])]
+    return "", []
+
+
 def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or load_config()
     cfg.check_production_security()   # refuse to start in production without the Access gate
@@ -312,7 +326,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             return out
 
     @app.get("/batches/{batch_id}/offers")
-    def batch_offers(batch_id: int, who: Identity = Depends(require_identity)):
+    def batch_offers(batch_id: int, brand: str | None = None,
+                     who: Identity = Depends(require_identity)):
+        """A batch's offer lines. `brand` restricts them to that brand, so the detail view of a
+        multi-brand supplier offer shows only the brand being viewed (matching the export)."""
         with get_conn() as conn:
             b = conn.execute(
                 "SELECT b.*, s.name AS supplier_name FROM offer_batches b "
@@ -321,18 +338,21 @@ def create_app(config: Config | None = None) -> FastAPI:
             if b is None:
                 raise HTTPException(404, detail=f"batch {batch_id} not found")
             rate = b["fx_rate_eur"] or ("1" if (b["currency"] or "").upper() == "EUR" else None)
+            frag, extra = _brand_line_filter(conn, brand)
             lines = []
             for r in conn.execute(
                 "SELECT o.price_original, p.ean, p.description FROM offers o "
-                "JOIN products p ON p.product_id = o.product_id WHERE o.batch_id = ? "
-                "ORDER BY o.price_original", (batch_id,)):
+                "JOIN products p ON p.product_id = o.product_id WHERE o.batch_id = ?" + frag +
+                " ORDER BY o.price_original", [batch_id, *extra]):
                 lines.append({
                     "ean": r["ean"], "description": r["description"],
                     "price_original": str(money.from_minor(r["price_original"]).quantize(money.CENT)),
                     "price_eur": (str(money.unit_price_eur(r["price_original"], rate).quantize(money.CENT))
                                   if rate else None)})
+            display_brand = (brand if (brand and brand != "__unknown__")
+                             else ("Unknown" if brand == "__unknown__" else b["brand"]))
             return {
-                "batch_id": batch_id, "supplier": b["supplier_name"], "brand": b["brand"],
+                "batch_id": batch_id, "supplier": b["supplier_name"], "brand": display_brand,
                 "received_date": b["received_date"], "currency": b["currency"],
                 "territory": b["territory"], "kind": b["kind"],
                 "kind_label": offer_types.kind_label(b["kind"]), "ended_at": b["ended_at"],
@@ -362,20 +382,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             if b is None:
                 raise HTTPException(404, detail=f"batch {batch_id} not found")
             rate = b["fx_rate_eur"] or ("1" if (b["currency"] or "").upper() == "EUR" else None)
+            frag, extra = _brand_line_filter(conn, brand)
             sql = ("SELECT o.price_original, p.ean, p.description FROM offers o "
-                   "JOIN products p ON p.product_id = o.product_id WHERE o.batch_id = ?")
-            params: list = [batch_id]
-            if brand == "__unknown__":
-                sql += " AND p.brand_id IS NULL"
-            elif brand:
-                br = repo.get_brand_by_name(conn, brand)
-                if br is None:
-                    raise HTTPException(404, detail=f"brand {brand!r} not found")
-                sql += " AND p.brand_id = ?"
-                params.append(int(br["brand_id"]))
-            sql += " ORDER BY o.price_original"
+                   "JOIN products p ON p.product_id = o.product_id WHERE o.batch_id = ?" + frag +
+                   " ORDER BY o.price_original")
             lines = []
-            for r in conn.execute(sql, params):
+            for r in conn.execute(sql, [batch_id, *extra]):
                 cost = (money.unit_price_eur(r["price_original"], rate) if rate
                         else money.from_minor(r["price_original"]))
                 sell = (cost / (Decimal(1) - m)).quantize(money.CENT)

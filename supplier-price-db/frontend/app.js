@@ -670,8 +670,10 @@ async function openOfferDetails(bid) {
   // fails silently if the fetch is slow or errors (that was the "details don't always appear" bug).
   openModal(`<div class="detail-header"><div><h2>Offer</h2></div><div class="x" data-act="closemodal">×</div></div>
      <div class="detail-body"><div class="muted" style="padding:24px">Loading offer…</div></div>`);
+  // show only the brand currently being viewed, even for a multi-brand supplier offer (matches export)
+  const brand = activeBrand || "";
   let b;
-  try { b = await apiGet("/batches/" + bid + "/offers"); }
+  try { b = await apiGet("/batches/" + bid + "/offers" + (brand ? "?brand=" + encodeURIComponent(brand) : "")); }
   catch (e) { closeModal(); toast("Could not open the offer: " + (e && e.message ? e.message : e)); return; }
   const rows = b.lines.map(o => `<tr><td class="muted">${esc(o.ean)}</td><td>${esc(o.description || "")}</td><td class="num">${fmt(o.price_eur)}</td></tr>`).join("");
   const st = (l, v) => `<div class="stat"><div class="stat-label">${esc(l)}</div><div class="stat-value" style="font-size:14px">${esc(v || "—")}</div></div>`;

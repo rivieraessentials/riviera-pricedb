@@ -152,6 +152,9 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
 - **Brand-scoped:** the export includes **only the lines of the brand currently being viewed**
   (`brand=` = the active Offers tab). So a **multi-brand supplier offer exports just that one brand**,
   never the whole multi-brand list. `brand=__unknown__` exports the no-brand-yet products.
+- The **offer-detail view is brand-scoped the same way**: opening a multi-brand supplier offer from a
+  brand's tab shows only that brand's lines (and the Lines count reflects it). `/batches/{id}/offers`
+  takes the same `brand=` filter, so the detail view and the export always agree.
 
 ## 8. Uploading (UX)
 

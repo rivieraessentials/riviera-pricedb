@@ -336,3 +336,10 @@ def test_offer_export_fills_template_and_filters_brand(client):
 
     # a margin of 100%+ is rejected
     assert client.get(f"/batches/{multi}/export", params={"margin": "1.5"}).status_code == 422
+
+    # the offer DETAIL view is brand-scoped too: all lines without a brand, one line with it
+    allp = client.get(f"/batches/{multi}/offers").json()
+    assert len(allp["lines"]) == 2
+    only = client.get(f"/batches/{multi}/offers", params={"brand": "Alpha"}).json()
+    assert len(only["lines"]) == 1 and only["lines"][0]["ean"] == ean_a
+    assert only["brand"] == "Alpha"                      # header shows the viewed brand
