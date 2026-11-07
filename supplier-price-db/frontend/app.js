@@ -370,26 +370,33 @@ VIEWS.rankings = async function (c, _retried) {
 };
 // Download the Offers grid exactly as shown — active brand, search / territory / currency
 // filters, column order, sort and compare mode — as a plain .xlsx: EAN, Product, then either
-// Δ% (in compare mode) or Best price, then one column per supplier offer. Prices are in the
-// display currency, as on screen. This is a data dump (no template styling), so it is built
-// in-browser with the vendored SheetJS, downloaded the same way as the offer-template export.
+// Δ% (in compare mode) or Best (EUR), then one column per supplier offer. Each supplier column
+// keeps that offer's OWN currency (the original price, never an EUR/display conversion) with the
+// currency named in its header; only Best stays in EUR, since it compares across currencies.
+// This is a data dump (no template styling), so it is built in-browser with the vendored SheetJS,
+// downloaded the same way as the offer-template export.
 function extractGrid() {
   const prods = _gridProds || [], cols = _gridCols || [];
   if (!prods.length) { toast("Nothing to extract in this tab."); return; }
-  const cur = display;
-  const priceOf = (row, bid) => (row.prices[bid] != null ? parseFloat(row.prices[bid]) : null);
-  const money = (eur) => (eur == null ? null : +conv(eur).toFixed(2));
+  const num = (v) => (v == null || v === "" ? null : +parseFloat(v).toFixed(2));
+  // supplier column = the offer's original price in its own currency (for a EUR offer the stored
+  // EUR value IS the original); Best and Δ% stay on the EUR values, matching the on-screen grid.
+  const origPrice = (p, b) => (b.currency && b.currency !== "EUR")
+    ? num(p.orig ? p.orig[b.batch_id] : null)
+    : num(p.prices[b.batch_id]);
+  const eurOf = (row, bid) => num(row.prices[bid]);
   const colHdr = (b) => b.supplier + " · " + fmtDate(b.received_date) +
-    ((b.kind_label || b.kind) ? " · " + (b.kind_label || b.kind) : "") + (b.ended_at ? " (ended)" : "");
-  const head = ["EAN", "Product", _gridShowDiff ? "Δ% (B vs A)" : "Best (" + cur + ")"].concat(cols.map(colHdr));
+    ((b.kind_label || b.kind) ? " · " + (b.kind_label || b.kind) : "") +
+    " · " + (b.currency || "EUR") + (b.ended_at ? " (ended)" : "");
+  const head = ["EAN", "Product", _gridShowDiff ? "Δ% (B vs A)" : "Best (EUR)"].concat(cols.map(colHdr));
   const aoa = [head];
   prods.forEach(p => {
     const r = [p.ean, p.description || ""];
     if (_gridShowDiff) {
-      const a = priceOf(p, cmpA), b = priceOf(p, cmpB);
+      const a = eurOf(p, cmpA), b = eurOf(p, cmpB);
       r.push((a != null && b != null && a > 0) ? +(((b - a) / a) * 100).toFixed(1) : null);
-    } else r.push(money(p.best_eur));
-    cols.forEach(b => r.push(money(priceOf(p, b.batch_id))));
+    } else r.push(num(p.best_eur));
+    cols.forEach(b => r.push(origPrice(p, b)));
     aoa.push(r);
   });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -408,7 +415,7 @@ function extractGrid() {
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fn;
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
-  toast("Extracted " + prods.length + " products" + (cur !== "EUR" ? " · " + cur : "") + ".");
+  toast("Extracted " + prods.length + " products.");
 }
 function toolbarHTML(currencies) {
   currencies = currencies || [];
