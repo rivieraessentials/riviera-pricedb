@@ -130,7 +130,7 @@ function detectCols(hdr) {
   L.forEach((l, i) => { if (ppb < 0 && l && inc(l, "case pack", "prepack", "outer pack", "pcs/box", "pcs / box", "per box", "colisage", "units/box", "pieces per", "qty/box", "pcb")) ppb = i; });
   let qty = -1;
   L.forEach((l, i) => { if (qty < 0 && i !== ean && l && (l === "qty" || l === "quantity" || l === "stock" || l === "q.ty" || inc(l, "available qty", "qty available", "available quantity", "in stock", "disponib", "dispo", "stock qty", "quantité", "quantity available"))) qty = i; });
-  const PK = ["price", "eur", "usd", "gbp", "sgd", "cad", "hkd", "srp", "euro", "prix", "cost", "wholesale", "retail", "pvp", "net", "prezzo", "preis", "target", "cible", "objectif"];
+  const PK = ["price", "eur", "usd", "gbp", "sgd", "cad", "hkd", "srp", "euro", "prix", "cost", "wholesale", "retail", "pvp", "net", "prezzo", "preis", "precio", "preço", "preco", "preços", "precios", "tarif", "target", "cible", "objectif"];
   const EX = ["total", "order", "qty", "quantity", "stock", "available", "moq", "tariff", "code", "pack", "pieces", "pcs", "margin", "discount", "vat"];
   L.forEach((l, i) => { if (i === ean || i === qty) return; if (l && PK.some(k => l.includes(k)) && !EX.some(x => l.includes(x))) prices.push(i); });
   // brand column (used only for multi-brand imports; absent on many files)
@@ -679,12 +679,54 @@ async function openOfferDetails(bid) {
    </div>`);
   window.__offerCache = b;
 }
-async function exportOffer(bid) {
+// Export fills the owner's offer template (EAN / Description / Price), applying a margin the owner
+// picks each time. Everything else in the template (MOQ, Terms, ExW, Currency, Quantity and the
+// Total = Price × Quantity formula) is left for the owner to fill. Written as .xlsx so the template's
+// formulas, number formats and styling survive (writing .xls would drop the Total formulas).
+function exportOffer(bid) {
+  openModal(`<div class="detail-header"><div><h2>Export offer</h2>
+      <div class="sub">Fills EAN, Description and Price into your offer template — you fill in the rest.</div></div>
+      <div class="x" data-act="closemodal">×</div></div>
+    <div class="detail-body">
+      <div class="fl">Margin to apply (%)</div>
+      <input id="exp-margin" type="number" step="0.1" min="0" max="99" value="7" style="max-width:140px" autofocus/>
+      <div class="muted" style="margin-top:10px;line-height:1.55">Sell price = offer cost ÷ (1 − margin), in EUR, rounded to 2 decimals — the same margin basis as customer requests. Quantity and Total are left empty for you (Total = Price × Quantity).</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+        <button data-act="closemodal">Cancel</button>
+        <button class="success" data-act="doexportoffer" data-bid="${bid}">⤓ Export</button></div>
+    </div>`);
+  queueFocus("exp-margin");
+  const el = document.getElementById("exp-margin"); if (el) el.focus();
+}
+async function doExportOffer(bid) {
+  const mv = parseFloat((document.getElementById("exp-margin") || {}).value);
+  const margin = (isFinite(mv) ? mv : 7) / 100;
+  if (margin < 0 || margin >= 1) { toast("Margin must be between 0 and 99%."); return; }
   const b = window.__offerCache && window.__offerCache.batch_id == bid ? window.__offerCache : await apiGet("/batches/" + bid + "/offers");
-  const aoa = [["EAN", "Description", "Price EUR"]];
-  b.lines.forEach(o => aoa.push([o.ean, o.description || "", o.price_eur]));
-  const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "offer");
-  XLSX.writeFile(wb, ((b.supplier || "offer") + "_" + (b.brand || "") + "_" + (b.received_date || "") + ".xlsx").replace(/[^\w.-]+/g, "_"));
+  let tbuf;
+  try { tbuf = await fetch("/static/offer_template.xls").then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); }); }
+  catch (e) { toast("Could not load the offer template."); return; }
+  const wb = XLSX.read(new Uint8Array(tbuf), { type: "array", cellStyles: true, cellNF: true, cellFormula: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const EURFMT = '"€"\\ #,##0.00';
+  const START = 10;                                  // data rows begin at row 10 (header is row 9)
+  const enc = (c, r) => XLSX.utils.encode_cell({ c: c, r: r });
+  b.lines.forEach((o, i) => {
+    const r0 = START - 1 + i, r1 = r0 + 1;            // 0-based cell row, 1-based for formulas
+    const cost = o.price_eur != null ? parseFloat(o.price_eur) : (o.price_original != null ? parseFloat(o.price_original) : null);
+    const sell = cost != null ? Math.round(cost / (1 - margin) * 100) / 100 : null;
+    ws[enc(0, r0)] = { t: "s", v: String(o.ean) };                       // A: EAN
+    ws[enc(1, r0)] = { t: "s", v: o.description || "" };                 // B: Description
+    if (sell != null) ws[enc(2, r0)] = { t: "n", v: sell, z: EURFMT };   // C: Price (margin applied)
+    const ec = enc(4, r0);                                                // E: Total = Price × Quantity
+    if (!ws[ec] || !ws[ec].f) ws[ec] = { t: "n", v: 0, f: "D" + r1 + "*C" + r1, z: EURFMT };
+  });
+  const lastRow = Math.max(1230, START - 1 + b.lines.length);
+  ws["!ref"] = "A1:G" + lastRow;
+  const fn = ((b.supplier || "offer") + "_" + (b.brand || "") + "_" + (b.received_date || "") + "_offer.xlsx").replace(/[^\w.-]+/g, "_");
+  XLSX.writeFile(wb, fn, { bookType: "xlsx" });
+  closeModal();
+  toast(b.lines.length + " line(s) exported — " + (margin * 100).toFixed(1).replace(/\.0$/, "") + "% margin applied.");
 }
 function deleteBatch(bid) {
   confirmModal("Delete this offer column? This permanently removes the batch and its price lines.", async () => {
@@ -989,6 +1031,7 @@ document.addEventListener("click", e => {
     case "saveprod": saveProductEdit(ean); break;
     case "saveline": saveLine(); break;
     case "exportoffer": exportOffer(bid); break;
+    case "doexportoffer": doExportOffer(bid); break;
     case "delbatch": deleteBatch(bid); break;
     case "endoffer": endOffer(bid); break;
     case "doimport": doImport(); break;

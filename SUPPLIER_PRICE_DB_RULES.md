@@ -120,12 +120,33 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
 - **Headerless files** are supported: a row that contains a real EAN is treated as data, never a
   header (so a product name containing a keyword substring — e.g. "net" in "nettoyant" — is not
   mistaken for a header row). A bare number (e.g. "6.01") is a price, not a size.
+- **Multilingual headers:** price columns are recognised in several languages (`price`, `prix`,
+  `precio`/`precios`, `preço`/`preco`/`preços`, `prezzo`, `preis`, `tarif`, `pvp`, `srp`, …) and the
+  description likewise (`description`, `descripcion`, `descrizione`, `désignation`, …). A price column
+  found by its header is read even when **every value is a whole number** (e.g. 35, 40) — the
+  decimal-only fallback applies only when no price header was recognised. (Bug fixed: a Spanish D&G
+  file headed `EAN CODE / DESCRIPCION / PRECIO` with integer prices scanned 0 sheets.)
 
 ## 7a. Editing a product
 
 - The product **description is editable in place**: click the Product cell in the Offers grid, type,
   press Enter to save (Esc cancels). Clicking the **EAN cell** opens the full editor (brand +
   description). Re-import also self-heals a size/empty description (§7).
+
+## 7b. Exporting an offer (owner's template)
+
+- The offer-detail **⤓ Export** fills the owner's own **offer template** (`frontend/offer_template.xls`,
+  served at `/static/offer_template.xls`): data rows start at **row 10** (header in row 9), columns
+  **A = EAN, B = Description, C = Price, D = Quantity, E = Total**. The export writes **A, B and C
+  only**; **Quantity (D)** and the header block (Offer / MOQ / Terms / ExW / Lead time / Currency) are
+  left for the owner. **Total (E) keeps its `= D*C` formula** per row, so the total computes once the
+  owner types a quantity.
+- **Margin is asked each time** (default 7%). Price = **offer cost ÷ (1 − margin)**, in **EUR**,
+  rounded to 2 decimals — the same margin basis as customer requests. (Falls back to the offer's
+  original-currency price only if no EUR value is available.)
+- Written as **`.xlsx`** (not `.xls`): the SheetJS community build drops cell **formulas** when writing
+  `.xls`, so `.xls` output would lose the Total formula. `.xlsx` round-trips the template's formulas,
+  euro number formats, fills and column widths intact — it is still a native Excel file.
 
 ## 8. Uploading (UX)
 
