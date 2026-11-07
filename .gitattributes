@@ -1,0 +1,5 @@
+# These run on the Linux server — force LF so a Windows checkout can't inject CRLF
+# (CRLF would break the shebang in the shell scripts and confuse systemd).
+*.sh text eol=lf
+supplier-price-db/deploy/systemd/** text eol=lf
+supplier-price-db/deploy/config.toml.example text eol=lf

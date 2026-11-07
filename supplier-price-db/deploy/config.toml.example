@@ -1,0 +1,41 @@
+# PRODUCTION config for the Riviera supplier price DB.
+#
+# Copy this to the server as the app's config and fill in every <PLACEHOLDER>.
+#   - system service (sudo):   /etc/pricedb/config.toml      (root:pricedb, chmod 640)
+#   - user service (no sudo):  ~/pricedb/config.toml         (chmod 600)
+# The service points at it with the PRICEDB_CONFIG env var (see the systemd units).
+#
+# In production the app REFUSES to start unless all of these are set (app/config.py):
+#   [access] enabled=true + team_name + aud_tag, [identity] allowed_emails non-empty,
+#   and [server] public_origin. That is the built-in security gate — do not weaken it.
+
+[server]
+host = "127.0.0.1"            # localhost ONLY; Cloudflare's tunnel fronts it, never expose directly
+port = 8001
+environment = "production"    # turns the security gate ON (see above)
+public_origin = "https://prices.rivieraessentials.com"   # used for the Origin/CSRF check on writes
+allowed_origins = []          # leave empty unless you have a real second origin
+
+[database]
+# Absolute path. System service: /data/pricedb/pricedb.sqlite
+#                 User service:   /home/<YOUR_USER>/pricedb/data/pricedb.sqlite
+path = "<ABSOLUTE_DB_PATH>"
+
+[identity]
+# Defence-in-depth allow-list (Cloudflare Access is the real gate). Case-insensitive.
+allowed_emails = [
+    "<MAIN_EMAIL>",           # your main address
+    "<BACKUP_EMAIL>",         # the Gmail backup address (also the 2nd Cloudflare admin)
+]
+
+[access]
+enabled = true
+team_name = "<CF_TEAM_NAME>"  # just the team slug, NOT a URL (issuer = https://<team>.cloudflareaccess.com)
+aud_tag   = "<CF_AUD_TAG>"    # Zero Trust > Access > Applications > (your app) > Application Audience (AUD) Tag
+# dev_identity is irrelevant in production (Access is ON); leave default.
+
+[fx]
+symbols = ["GBP", "USD", "SGD", "CAD", "HKD"]
+timeout = 10.0
+frankfurter_url = "https://api.frankfurter.dev/v1/latest"
+ecb_url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"

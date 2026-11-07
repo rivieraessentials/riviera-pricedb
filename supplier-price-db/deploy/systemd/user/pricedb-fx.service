@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily FX fetch for the price DB (user service)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/pricedb/supplier-price-db/backend
+Environment=PRICEDB_CONFIG=%h/pricedb/config.toml
+ExecStart=%h/pricedb/supplier-price-db/backend/.venv/bin/python -m app.fx

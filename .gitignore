@@ -7,6 +7,9 @@ prototype.html
 # Local config holds the Cloudflare Access allow-list / settings — commit config.example.toml instead
 config.toml
 
+# Backup env holds the restic repo URL + password — server only, never commit
+backup.env
+
 # Secrets — GitHub 2FA recovery codes must NEVER be committed (belong off the repo entirely)
 github-recovery-codes.txt
 *recovery*
@@ -18,6 +21,9 @@ github-recovery-codes.txt
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # Runtime data and uploaded originals
 data/

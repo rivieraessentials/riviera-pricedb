@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly restore drill for the price DB backup (proves it restores)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pricedb
+Group=pricedb
+EnvironmentFile=/etc/pricedb/backup.env
+ExecStart=/usr/local/bin/pricedb-restore-drill.sh

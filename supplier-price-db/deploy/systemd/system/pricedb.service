@@ -1,0 +1,28 @@
+[Unit]
+Description=Riviera supplier price DB (uvicorn on 127.0.0.1:8001)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pricedb
+Group=pricedb
+WorkingDirectory=/opt/pricedb/supplier-price-db/backend
+Environment=PRICEDB_CONFIG=/etc/pricedb/config.toml
+ExecStart=/opt/pricedb/supplier-price-db/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=2
+
+# Hardening (the app only needs to read its code and read/write its data dir).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/pricedb
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

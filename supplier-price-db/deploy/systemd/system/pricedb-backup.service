@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly off-site backup of the price DB (restic -> BorgBase)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pricedb
+Group=pricedb
+EnvironmentFile=/etc/pricedb/backup.env
+ExecStart=/usr/local/bin/pricedb-backup.sh
