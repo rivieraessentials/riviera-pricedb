@@ -318,9 +318,11 @@ VIEWS.rankings = async function (c, _retried) {
   let prods = data.rows.slice();
   if (searchQ.trim()) { const q = searchQ.toLowerCase(); prods = prods.filter(p => p.ean.includes(q) || (p.description || "").toLowerCase().includes(q)); }
   const priceOf = (row, bid) => (row.prices[bid] != null ? parseFloat(row.prices[bid]) : null);
-  if (showDiff && !sortCol) { const pctOf = (p) => { const a = priceOf(p, cmpA), b = priceOf(p, cmpB); return (a != null && b != null && a > 0) ? (b - a) / a * 100 : -1e9; }; prods.sort((a, b) => pctOf(b) - pctOf(a)); }
-  else if (!sortCol) prods.sort((a, b) => (a.description || "~").localeCompare(b.description || "~"));
-  else { const BIG = 1e18; const val = (p) => { if (sortCol === "ean") return parseFloat(p.ean) || 0; if (sortCol === "prod") return (p.description || "").toLowerCase(); if (sortCol === "best") { const m = p.best_eur == null ? null : parseFloat(p.best_eur); return m == null ? -BIG : m; } if (sortCol[0] === "b") { const v = priceOf(p, +sortCol.slice(1)); return v == null ? -BIG : v; } return 0; }; prods = prods.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; }); }
+  const diffPct = (p) => { const a = priceOf(p, cmpA), b = priceOf(p, cmpB); return (a != null && b != null && a > 0) ? (b - a) / a * 100 : null; };
+  const activeSort = (sortCol === "diff" && !showDiff) ? null : sortCol;   // a Δ% sort is void once compare is off
+  if (showDiff && !activeSort) prods.sort((a, b) => (diffPct(b) == null ? -1e9 : diffPct(b)) - (diffPct(a) == null ? -1e9 : diffPct(a)));
+  else if (!activeSort) prods.sort((a, b) => (a.description || "~").localeCompare(b.description || "~"));
+  else { const BIG = 1e18; const val = (p) => { if (activeSort === "ean") return parseFloat(p.ean) || 0; if (activeSort === "prod") return (p.description || "").toLowerCase(); if (activeSort === "diff") { const v = diffPct(p); return v == null ? -BIG : v; } if (activeSort === "best") { const m = p.best_eur == null ? null : parseFloat(p.best_eur); return m == null ? -BIG : m; } if (activeSort[0] === "b") { const v = priceOf(p, +activeSort.slice(1)); return v == null ? -BIG : v; } return 0; }; prods = prods.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; }); }
 
   let cols = bs; if (showDiff) cols = [bs.find(b => b.batch_id == cmpA), bs.find(b => b.batch_id == cmpB)];
   _curCols = bs.map(b => b.batch_id);
@@ -334,6 +336,7 @@ VIEWS.rankings = async function (c, _retried) {
   h += '<div class="grid-wrap"><table class="grid"><thead><tr><th class="c-star"></th>' +
     `<th class="c-ean lx" style="cursor:pointer" data-act="sort" data-col="ean">EAN${sortArrow("ean")}</th>` +
     `<th class="c-prod lx" style="cursor:pointer" data-act="sort" data-col="prod">Product${sortArrow("prod")}</th>` +
+    (showDiff ? `<th class="diffcell" style="cursor:pointer" data-act="sort" data-col="diff" title="sort highest change first">Δ% (B vs A)${sortArrow("diff")}</th>` : "") +
     (showDiff ? "" : `<th style="cursor:pointer" data-act="sort" data-col="best">Best ${esc(display)}${sortArrow("best")}</th>`) +
     cols.map(b => {
       const sel = b.batch_id == cmpA ? "a" : b.batch_id == cmpB ? "b" : ""; const tag = sel === "a" ? " colA" : sel === "b" ? " colB" : "";
@@ -343,8 +346,7 @@ VIEWS.rankings = async function (c, _retried) {
       return `<th class="suphdr" style="cursor:pointer" title="Click for offer details" data-act="offer" data-bid="${b.batch_id}">
         <div class="s1">${cstar}${arrows}<span data-act="sort" data-col="b${b.batch_id}" title="sort" style="cursor:pointer">${sortArrow("b" + b.batch_id)}</span> ${esc(b.supplier)}</div>
         <div class="s2">${esc(fmtDate(b.received_date))} · ${esc(b.kind_label || b.kind || "")}${ended}</div></th>`;
-    }).join("") +
-    (showDiff ? '<th class="diffcell">Δ% (B vs A)</th>' : "") + "</tr></thead><tbody>";
+    }).join("") + "</tr></thead><tbody>";
 
   prods.forEach(p => {
     const best = p.best_eur == null ? null : parseFloat(p.best_eur);
@@ -352,6 +354,8 @@ VIEWS.rankings = async function (c, _retried) {
       <td class="c-star"><span class="star ${p.is_bestseller ? "on" : ""}" data-act="best" data-ean="${esc(p.ean)}">${p.is_bestseller ? "★" : "☆"}</span></td>
       <td class="c-ean lx" style="cursor:pointer" title="edit brand / description" data-act="prodedit" data-ean="${esc(p.ean)}">${esc(p.ean)}</td>
       <td class="c-prod lx editable" title="click to edit the description" data-act="descedit" data-ean="${esc(p.ean)}">${p.description ? esc(p.description) : '<span class="muted">⚠ no description</span>'}</td>`;
+    if (showDiff) { const d = diffPct(p);
+      h += d != null ? `<td class="diffcell ${d > 0 ? "up" : "dn"}">${d > 0 ? "+" : ""}${d.toFixed(1)}%</td>` : '<td class="diffcell"><span class="dlt">—</span></td>'; }
     if (!showDiff) h += `<td class="best-euro">${best != null ? fmt(best) : "—"}</td>`;
     cols.forEach(b => { const v = priceOf(p, b.batch_id); const tag = b.batch_id == cmpA ? " colA" : b.batch_id == cmpB ? " colB" : "";
       if (v == null) { h += `<td class="pricecell${tag}"><span class="dlt">—</span></td>`; return; }
@@ -359,9 +363,6 @@ VIEWS.rankings = async function (c, _retried) {
       const origLine = (o != null && b.currency && b.currency !== "EUR")
         ? `<div class="muted" style="font-weight:400">${esc(sym(b.currency))}${(parseFloat(o)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : "";
       h += `<td class="pricecell ${(b.batch_id == p.best_batch_id && !showDiff) ? "best" : ""}${tag}">${fmt(v)}${origLine}</td>`; });
-    if (showDiff) { const a = priceOf(p, cmpA), b = priceOf(p, cmpB);
-      if (a != null && b != null && a > 0) { const pct = (b - a) / a * 100; h += `<td class="diffcell ${pct > 0 ? "up" : "dn"}">${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</td>`; }
-      else h += '<td class="diffcell"><span class="dlt">—</span></td>'; }
     h += "</tr>";
   });
   h += "</tbody></table></div>"; c.innerHTML = h;
