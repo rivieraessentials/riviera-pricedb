@@ -10,6 +10,9 @@ config.toml
 # Backup env holds the restic repo URL + password — server only, never commit
 backup.env
 
+# Filled deploy runbook holds real email addresses — local only, never commit (template is DEPLOY_RUNBOOK.md)
+DEPLOY_RUNBOOK_FILLED.md
+
 # Secrets — GitHub 2FA recovery codes must NEVER be committed (belong off the repo entirely)
 github-recovery-codes.txt
 *recovery*
