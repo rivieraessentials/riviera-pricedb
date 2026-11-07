@@ -206,6 +206,24 @@ it loads the newest backup read-only and confirms it's current and parseable.
 
 ### 5.1 Creating the off-site backup on BorgBase (restic) — exact steps
 
+> **DEFERRED (2026-11-07) — BorgBase access pending.** The owner is locked out of BorgBase (2FA recovery
+> codes not found), so the separate `pricedb` repo can't be created yet. The price DB **goes live without
+> off-site backup**, with interim protection in place (below). **Hard deadline: off-site backups must be in
+> place within TWO WEEKS of go-live** — either via this BorgBase repo once access is recovered, **or** via
+> the fallback of adding the price DB snapshot to the **CRM's existing restic job** (this needs **CRM-side
+> approval first** — do not change the CRM job without it). The BorgBase steps below apply unchanged once
+> access is back.
+>
+> **Interim backups in force until off-site lands:**
+> 1. **Nightly on-box snapshot** — `deploy/pricedb-snapshot.sh` + `pricedb-snapshot.timer` write a
+>    consistent SQLite `.backup` snapshot to `/data/pricedb/snapshots/` (kept 14 days, same perms as the DB).
+>    Protects against mistakes (bad import, accidental delete), **not** against losing the server.
+> 2. **Downloaded export bundle** — the owner downloads the backup archive after each import session (at
+>    least weekly) to the encrypted drive; that is the only interim copy that survives losing the server.
+> 3. **Hetzner's own server backup** — considered, **not enabled** (owner decision; see runbook Step 5 note).
+> 4. **Security gate** marks off-site as *DEFERRED — BorgBase access pending* (not PASS) and instead tests a
+>    restore from the local snapshot and from a downloaded bundle (`deploy/SECURITY_GATE.md` §5).
+
 This is copy **2** above. It mirrors the CRM's existing **restic → BorgBase** job (EU, append-only key on the
 box, full key off-box); the price DB is just one more path. *(This is the content the README's missing
 `BACKUP_SYSTEM.md` was meant to hold — it lives here until that file exists.)* Placeholders in `<…>`.
@@ -260,6 +278,13 @@ box, full key off-box); the price DB is just one more path. *(This is the conten
 ---
 
 ## 6. Status of decisions
+
+**Decided (2026-11-07):** go **live without off-site backup** (BorgBase account locked out). Interim: a
+nightly **on-box SQLite snapshot** (`pricedb-snapshot.timer`, kept 14 days) + the owner's **downloaded
+export bundle** after each import session. **Off-site backup must be in place within two weeks of go-live** —
+BorgBase repo once access is recovered, or the fallback of adding the price DB to the **CRM restic job**
+(needs CRM approval first). Security gate marks off-site **DEFERRED — BorgBase access pending** and tests
+restore from the local snapshot + a downloaded bundle instead (§5.1, `deploy/SECURITY_GATE.md` §5).
 
 **Decided (2026-10-31):** address = **`prices.rivieraessentials.com`**; file types **.xlsx/.xls/.csv**
 (SheetJS self-hosted + SRI, Apache-2.0); offline copy = **download button + weekly reminder**; **systemd for the

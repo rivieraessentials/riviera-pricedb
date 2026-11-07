@@ -653,7 +653,7 @@ VIEWS.settings = async function (c) {
   h += `<div class="card" style="margin-top:16px"><div class="card-title">Download the database</div>
     <div class="muted" style="margin-bottom:10px;line-height:1.55">A readable Excel workbook — <b>one sheet per brand</b>, a row per product, and <b>one column per supplier offer</b> (each in its own currency) plus a Best (EUR) column. This is the full database in the same shape as the Offers screen.</div>
     <a href="/export/workbook" download><button class="success">⤓ Download database (Excel)</button></a>
-    <div class="alert alert-amber" style="margin-top:16px">The backup archive below contains the <b>full database</b> (SQLite + CSV) — it's for restoring after a crash, not for reading. Save it only to the encrypted drive.</div>
+    <div class="alert alert-amber" style="margin-top:16px">The backup archive below is the <b>full database</b> (SQLite + CSV) — for restoring after a crash, not for reading. <b>Download it after each import session (at least weekly)</b> and keep it on the encrypted drive. Until off-site backups are in place, this downloaded copy is your only one that survives losing the server.</div>
     <a href="/export" download><button>⤓ Download backup archive (SQLite + CSV)</button></a></div>`;
   c.innerHTML = h;
 };

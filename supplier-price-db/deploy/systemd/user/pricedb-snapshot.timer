@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the price DB local snapshot once a day (user service)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

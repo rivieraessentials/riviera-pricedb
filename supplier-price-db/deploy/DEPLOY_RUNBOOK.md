@@ -173,51 +173,39 @@ systemctl --user status pricedb.service --no-pager
 
 ---
 
-## Step 5 — Off-site backup (BorgBase/restic) + restore drill
+## Step 5 — Interim backups (on-box snapshot now; off-site BorgBase deferred)
 
-> **Decided 2026-11-07:** the price DB gets its **own BorgBase repository and its own timer** — the
-> CRM nightly job is untouched (see [`restic-crm-change.md`](restic-crm-change.md), Option 1). So this
-> step creates a *new* repo and enables the price-DB timers only; there is nothing to change on the CRM.
+> **Off-site BorgBase is DEFERRED (2026-11-07) — account access pending.** Go live with **interim**
+> protection (below) and a **two-week deadline** to add off-site: the BorgBase repo once access is back, or
+> the CRM restic fallback (needs CRM approval first). The full BorgBase steps are **Step 9** at the end.
 
-Follow **build plan §5.1** ([`../../SUPPLIER_PRICE_DB_BUILD_PLAN.md`](../../SUPPLIER_PRICE_DB_BUILD_PLAN.md))
-for creating the BorgBase repo + the append-only/full key split. Then wire the scripts:
+Interim protection = a **nightly on-box snapshot** (consistent SQLite `.backup`, kept 14 days — protects
+against mistakes, **not** against losing the server) + the owner's **downloaded export bundle** after each
+import session (the copy that survives losing the server). `R` is the repo path from Step 4.
 
-1. **restic available?** `restic version`. If missing: Path A `sudo apt-get install -y restic`; Path B
-   download the binary to `~/bin` (from restic's GitHub releases) and `export PATH=$HOME/bin:$PATH`.
-2. **Install the scripts.**
-   - Path A: `sudo cp $R/deploy/pricedb-backup.sh $R/deploy/pricedb-restore-drill.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/pricedb-*.sh`
-   - Path B: `mkdir -p ~/pricedb/bin && cp $R/deploy/pricedb-backup.sh $R/deploy/pricedb-restore-drill.sh ~/pricedb/bin/ && chmod 755 ~/pricedb/bin/pricedb-*.sh`
-3. **Backup env file** (holds the repo URL + password; `600`):
-   - Path A `/etc/pricedb/backup.env`, Path B `~/pricedb/backup.env`:
-   ```
-   RESTIC_REPOSITORY=rest:https://<REPO_ID>.repo.borgbase.com
-   RESTIC_PASSWORD=<repo password>
-   PRICEDB_DB=<ABSOLUTE_DB_PATH>
-   PRICEDB_PY=<ABSOLUTE path to .venv/bin/python>
-   HEALTHCHECK_URL=https://hc-ping.com/<PRICEDB_CHECK_UUID>
-   DRILL_HEALTHCHECK_URL=https://hc-ping.com/<DRILL_CHECK_UUID>
-   ```
-   Perms: Path A `sudo chown root:pricedb /etc/pricedb/backup.env && sudo chmod 640` (readable by the
-   service user, not world); Path B `chmod 600 ~/pricedb/backup.env`.
-4. **Initialise the repo once with the FULL key** (append-only cannot init), then leave the server on the
-   append-only key. See §5.1.
-5. **First backup by hand**, then enable the timers:
-   - Path A: `sudo -u pricedb bash -lc 'set -a; . /etc/pricedb/backup.env; set +a; /usr/local/bin/pricedb-backup.sh'`
-     then `sudo systemctl enable --now pricedb-backup.timer pricedb-restore-drill.timer`
-   - Path B: `set -a; . ~/pricedb/backup.env; set +a; ~/pricedb/bin/pricedb-backup.sh`
-     then `systemctl --user enable --now pricedb-backup.timer pricedb-restore-drill.timer`
-6. **Prove the restore** (do this before cutover): run `pricedb-restore-drill.sh` the same way. It must
-   print `restore drill OK: N offers, ...`.
-7. **CRM side:** clear [`restic-crm-change.md`](restic-crm-change.md) with the CRM — recommended Option 1
-   keeps the price DB on its own repo/timer, so **nothing in the CRM job changes**.
+1. **Install the snapshot script.**
+   - Path A: `sudo cp $R/deploy/pricedb-snapshot.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/pricedb-snapshot.sh`
+   - Path B: `mkdir -p ~/pricedb/bin && cp $R/deploy/pricedb-snapshot.sh ~/pricedb/bin/ && chmod 755 ~/pricedb/bin/pricedb-snapshot.sh`
+2. **Install the snapshot service + daily timer.**
+   - Path A: `sudo cp $R/deploy/systemd/system/pricedb-snapshot.service $R/deploy/systemd/system/pricedb-snapshot.timer /etc/systemd/system/`; if you cloned to a `...-repo` path, apply the same `sed` path-fix as Step 4 to `/etc/systemd/system/pricedb-snapshot.service`; then `sudo systemctl daemon-reload && sudo systemctl enable --now pricedb-snapshot.timer`.
+   - Path B: `cp $R/deploy/systemd/user/pricedb-snapshot.service $R/deploy/systemd/user/pricedb-snapshot.timer ~/.config/systemd/user/`; then `systemctl --user daemon-reload && systemctl --user enable --now pricedb-snapshot.timer`.
+3. **Run one snapshot by hand and check it.**
+   - Path A: `sudo systemctl start pricedb-snapshot.service && sudo journalctl -u pricedb-snapshot.service -n 10 --no-pager`
+   - Path B: `systemctl --user start pricedb-snapshot.service && journalctl --user -u pricedb-snapshot.service -n 10 --no-pager`
+   Then list the snapshots dir (`<DB dir>/snapshots/`): expect a `pricedb-*.sqlite` file, **not** world-readable (file ≤ 640, dir ≤ 750).
+4. **Prove the restore** (before cutover): open the newest snapshot **read-only** and count rows —
+   `<venv python> -c "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print(c.execute('select count(*) from offers').fetchone()[0])" <newest snapshot>`. PASS = a sane row count.
+5. **Weekly off-server copy (owner, manual):** download **Download backup archive (SQLite + CSV)** from the
+   app's Settings screen after each import session (at least weekly) to the encrypted drive. Until Step 9,
+   this is the only copy that survives losing the server.
 
-**Expected:** `restic snapshots --tag pricedb` lists your first snapshot; the restore drill prints OK;
-`systemctl [--user] list-timers | grep pricedb` shows the backup + drill timers scheduled.
+**Expected:** `systemctl [--user] list-timers | grep pricedb` shows `pricedb-snapshot.timer`; the hand-run
+wrote a snapshot; the read-only restore prints a sane row count.
 
-**⟵ CHECKPOINT:** paste `restic snapshots --tag pricedb`, the restore-drill output, and the `list-timers` lines.
+**⟵ CHECKPOINT:** paste the hand-run journal line, the `ls -l` of the snapshots dir, and the restore count.
 
-*Rollback:* disable the two timers (as in Step 4 rollback, with the backup/drill names); the BorgBase repo
-can stay (it only holds backups). Remove the scripts/env file if abandoning.
+*Rollback:* disable the snapshot timer (Path A `sudo systemctl disable --now pricedb-snapshot.timer`; Path B
+`systemctl --user disable --now pricedb-snapshot.timer`); snapshots can stay or be deleted. Remove the scripts/env file if abandoning.
 
 ---
 
@@ -279,6 +267,49 @@ In a private window at `https://prices.rivieraessentials.com`, after the Access 
 Hand [`SECURITY_GATE.md`](SECURITY_GATE.md) to a reviewer **who did not write the code** (a separate agent
 is fine). They verify the measures on the running server and report PASS/FAIL with evidence. **Fix any
 FAIL before real use.** Section 1 (authentication) has no exceptions.
+
+---
+
+## Step 9 — Off-site backup (BorgBase/restic) — DEFERRED until account access is back
+
+Do this within **two weeks of go-live** (build plan deadline). Until then, interim protection (Step 5) is
+the only coverage. **If BorgBase stays unavailable**, the fallback is adding the price DB snapshot to the
+**CRM's existing restic job** — that needs **CRM-side approval first** ([`restic-crm-change.md`](restic-crm-change.md));
+don't change the CRM job without it.
+
+Follow **build plan §5.1** ([`../../SUPPLIER_PRICE_DB_BUILD_PLAN.md`](../../SUPPLIER_PRICE_DB_BUILD_PLAN.md))
+for creating the BorgBase repo + the append-only/full key split. Then wire the scripts:
+
+1. **restic available?** `restic version`. If missing: Path A `sudo apt-get install -y restic`; Path B
+   download the binary to `~/bin` (from restic's GitHub releases) and `export PATH=$HOME/bin:$PATH`.
+2. **Install the scripts.**
+   - Path A: `sudo cp $R/deploy/pricedb-backup.sh $R/deploy/pricedb-restore-drill.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/pricedb-*.sh`
+   - Path B: `mkdir -p ~/pricedb/bin && cp $R/deploy/pricedb-backup.sh $R/deploy/pricedb-restore-drill.sh ~/pricedb/bin/ && chmod 755 ~/pricedb/bin/pricedb-*.sh`
+3. **Backup env file** (holds the repo URL + password):
+   - Path A `/etc/pricedb/backup.env`, Path B `~/pricedb/backup.env`:
+   ```
+   RESTIC_REPOSITORY=rest:https://<REPO_ID>.repo.borgbase.com
+   RESTIC_PASSWORD=<repo password>
+   PRICEDB_DB=<ABSOLUTE_DB_PATH>
+   PRICEDB_PY=<ABSOLUTE path to .venv/bin/python>
+   HEALTHCHECK_URL=https://hc-ping.com/<PRICEDB_CHECK_UUID>
+   DRILL_HEALTHCHECK_URL=https://hc-ping.com/<DRILL_CHECK_UUID>
+   ```
+   Perms: Path A `sudo chown root:pricedb /etc/pricedb/backup.env && sudo chmod 640`; Path B `chmod 600 ~/pricedb/backup.env`.
+4. **Initialise the repo once with the FULL key** (append-only cannot init), then leave the server on the
+   append-only key. See §5.1.
+5. **First backup by hand**, then enable the timers:
+   - Path A: `sudo -u pricedb bash -lc 'set -a; . /etc/pricedb/backup.env; set +a; /usr/local/bin/pricedb-backup.sh'`
+     then `sudo systemctl enable --now pricedb-backup.timer pricedb-restore-drill.timer`
+   - Path B: `set -a; . ~/pricedb/backup.env; set +a; ~/pricedb/bin/pricedb-backup.sh`
+     then `systemctl --user enable --now pricedb-backup.timer pricedb-restore-drill.timer`
+6. **Prove the restore** (before cutover): run `pricedb-restore-drill.sh` the same way. It must
+   print `restore drill OK: N offers, ...`.
+7. **Re-run the off-site item** in [`SECURITY_GATE.md`](SECURITY_GATE.md) §5 (marked DEFERRED until now).
+
+**Expected:** `restic snapshots --tag pricedb` lists your first snapshot; the restore drill prints OK;
+`systemctl [--user] list-timers | grep pricedb` shows the backup + drill timers scheduled. The on-box
+snapshot timer (Step 5) can then stay as a second line of defence or be disabled.
 
 ---
 

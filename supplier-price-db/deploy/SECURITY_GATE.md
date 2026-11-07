@@ -53,13 +53,28 @@ item is PASS**. Any FAIL blocks cutover until fixed and re-checked.
       **not** committed (check `.gitignore` and `git log`).
 
 ## 5. Backups are real and restorable
-- [ ] **Off-site backup runs.** `systemctl list-timers | grep pricedb` shows the backup timer scheduled;
-      the last run succeeded; a snapshot exists in BorgBase (`restic snapshots --tag pricedb`).
-- [ ] **Restore actually works (not assumed).** Run `pricedb-restore-drill.sh` (or restore `latest` by hand
-      to a scratch dir, open read-only, count rows). PASS = it restores and parses with a sane row count.
-- [ ] **Append-only on the box.** The server's restic key cannot delete/prune (an attempt to
-      `restic forget` from the server is refused); the full key lives off the server.
-- [ ] **Monitoring.** A missed/failed nightly backup raises an alert to the same inbox as the CRM backups.
+> **Status: off-site backup is DEFERRED — BorgBase account access pending.** Go-live proceeds with
+> **interim** protection only: a nightly on-box SQLite snapshot plus the owner's downloaded export bundle.
+> Off-site backup must be in place within **two weeks of go-live** (build plan §5 deadline). Until then the
+> off-site item below is **DEFERRED, not PASS**, and the two interim-restore tests MUST pass.
+
+- [ ] **DEFERRED — Off-site backup.** The BorgBase repo + nightly restic timer are not yet set up (account
+      locked out). Record this as **DEFERRED — BorgBase access pending**, not PASS. It does not block go-live
+      but is tracked against the two-week deadline; re-run this item (off-site timer scheduled, last run OK,
+      `restic snapshots --tag pricedb` present, append-only key on the box) once off-site is live.
+- [ ] **Interim nightly local snapshot runs.** `systemctl list-timers | grep pricedb` shows
+      `pricedb-snapshot.timer` scheduled and its last run succeeded; a snapshot exists in
+      `/data/pricedb/snapshots/`, owned by the service user and **not world-readable** (file ≤ 640, dir ≤ 750).
+- [ ] **Restore from the local snapshot works (not assumed).** Copy the newest
+      `/data/pricedb/snapshots/pricedb-*.sqlite` to a scratch path, open it **read-only**, and count rows
+      (e.g. `SELECT count(*) FROM offers`). PASS = it opens and returns a sane row count matching the live DB.
+- [ ] **Restore from the downloaded export bundle works.** Take the owner's most recent downloaded backup
+      archive (the **Download backup archive (SQLite + CSV)** button), extract the `.sqlite`, open it
+      read-only and count rows. PASS = it opens and parses with a sane row count. This is the copy that
+      survives losing the server, so it must be proven too.
+- [ ] **Monitoring (interim gap noted).** The local snapshot has **no off-box success ping yet** — a failed
+      night would not email anyone until off-site backup + healthchecks.io land. Record this as a known gap
+      tied to the two-week deadline, not a PASS.
 
 ---
 

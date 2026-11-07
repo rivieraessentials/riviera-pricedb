@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly LOCAL SQLite snapshot of the price DB (interim on-box backup)
+
+[Service]
+Type=oneshot
+User=pricedb
+Group=pricedb
+Environment=PRICEDB_DB=/data/pricedb/pricedb.sqlite
+Environment=PRICEDB_PY=/opt/pricedb/supplier-price-db/backend/.venv/bin/python
+Environment=PRICEDB_SNAPSHOT_KEEP_DAYS=14
+ExecStart=/usr/local/bin/pricedb-snapshot.sh
