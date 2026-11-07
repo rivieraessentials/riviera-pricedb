@@ -122,27 +122,27 @@ either way.)*
 
 ## Part E — Apply the new ingress (the ONE step that can blip the CRM)  **[on the server — scheduled]**
 
-⚠️ **This is the only step that can briefly interrupt the CRM.** Reloading/restarting cloudflared re-reads
-the ingress. **Schedule it for a quiet evening** (you said today or tomorrow evening). Tell anyone using the
+⚠️ **This is the only step that can briefly interrupt the CRM.** Restarting cloudflared re-reads the
+ingress. **Schedule it for a quiet evening** (you said today or tomorrow evening). Tell anyone using the
 CRM it may blink for a few seconds.
 
-**E1. Prefer a reload (no dropped tunnel if your cloudflared honours SIGHUP):**
-```bash
-ssh -t tedj@178.105.34.50 'sudo systemctl reload cloudflared && sleep 2 && echo RELOADED'
-```
-Immediately check the CRM stayed up:
-```bash
-ssh tedj@178.105.34.50 'curl -s http://127.0.0.1:8000/healthz'
-```
-- ✅ `RELOADED`, then `ok`. If the CRM is fine and the new route works (Part F), you're done — **no restart
-  needed**.
+**Restart is the plan — reload is not supported here.** Cloudflare's official docs load config changes by
+a **restart**, not a reload — *"If you add IP routes or otherwise change the configuration, restart the
+service to load the new configuration"* ([Run as a service on Linux](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/as-a-service/linux/),
+checked 2026-11-07). There is **no documented `SIGHUP`/`systemctl reload`** for ingress, and the unit from
+`cloudflared service install` has **no `ExecReload`** (confirm: `systemctl show cloudflared -p ExecReload`
+is empty → `systemctl reload` would error). So expect a **few-seconds CRM blip**.
 
-**E2. Only if reload didn't pick up the new hostname** (Part F still 404s for prices), restart — a
-few‑seconds CRM blip, so do it in the scheduled window:
+**E1. Validate the config (changes nothing live):**
+```bash
+ssh -t tedj@178.105.34.50 'cloudflared tunnel ingress validate'
+```
+
+**E2. Restart cloudflared in the scheduled window, then confirm the CRM came back:**
 ```bash
 ssh -t tedj@178.105.34.50 'sudo systemctl restart cloudflared && sleep 3 && systemctl is-active cloudflared && curl -s http://127.0.0.1:8000/healthz'
 ```
-- ✅ `active` then `ok` (CRM back within a few seconds).
+- ✅ validate passes, then `active`, then `ok` — CRM back within a few seconds; verify the new route in Part F.
 
 ---
 
@@ -176,7 +176,7 @@ ssh tedj@178.105.34.50 'curl -s http://127.0.0.1:8001/healthz'
 
 **R1. [on the server]** restore the previous tunnel config and reload:
 ```bash
-ssh -t tedj@178.105.34.50 'sudo cp "$(ls -t /etc/cloudflared/config.yml.bak.* | head -1)" /etc/cloudflared/config.yml && sudo systemctl reload cloudflared && sleep 2 && curl -s http://127.0.0.1:8000/healthz'
+ssh -t tedj@178.105.34.50 'sudo cp "$(ls -t /etc/cloudflared/config.yml.bak.* | head -1)" /etc/cloudflared/config.yml && sudo systemctl restart cloudflared && sleep 3 && curl -s http://127.0.0.1:8000/healthz'
 ```
 - ✅ `ok` — the CRM is back on the original single‑hostname config.
 
@@ -225,7 +225,7 @@ Apply at server setup (step D), verify at the Security gate (step E):
 
 **In one line:** create the Access app + shared two‑email policy and the second Cloudflare admin **first**
 (dashboard), add the tunnel ingress for `:8001` and validate (server), add the proxied DNS CNAME
-(dashboard), then **reload cloudflared in a quiet window** (the only possible CRM blip), and verify the
+(dashboard), then **restart cloudflared in a quiet window** (the only possible CRM blip — a few seconds), and verify the
 Access login shows, the Gmail logs in, and the CRM still works — with a one‑minute rollback.
 
 ---

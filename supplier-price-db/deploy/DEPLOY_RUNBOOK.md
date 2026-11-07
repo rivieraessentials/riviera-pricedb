@@ -231,12 +231,27 @@ Do the existing [`../../SUBDOMAIN_SETUP_RUNBOOK.md`](../../SUBDOMAIN_SETUP_RUNBO
 put both into `config.toml` (Step 2) and `sudo systemctl restart pricedb.service` (Path A) /
 `systemctl --user restart pricedb.service` (Path B) so the app's own JWT check matches.
 
-**The one and only change that touches the CRM** is Part C+E: adding the `prices.rivieraessentials.com`
-ingress line to `/etc/cloudflared/config.yml` and applying it. Apply it with a **reload** (Part E1,
-`SIGHUP`) — cloudflared picks up the new hostname **without dropping the tunnel**, so ideally the CRM
-sees **no** downtime. A full **restart** (Part E2) is only the fallback if the reload doesn't take, and
-that's the few-seconds CRM blip — which is why Part E is scheduled for a **quiet evening**. Nothing else
-on the CRM changes: not its uvicorn, not its data, not its backup job.
+**The one and only change that touches the CRM** is adding the `prices.rivieraessentials.com` ingress
+line to `/etc/cloudflared/config.yml` and applying it with **`sudo systemctl restart cloudflared`**.
+Cloudflare's official docs document a **restart** (not a reload) as the way to load config changes:
+> "If you add IP routes or otherwise change the configuration, restart the service to load the new
+> configuration" → `systemctl restart cloudflared`
+> — [Run as a service on Linux](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/as-a-service/linux/) (checked 2026-11-07)
+
+There is **no documented `SIGHUP` / `systemctl reload`** for ingress changes, and the unit created by
+`cloudflared service install` defines **no `ExecReload`** — so `systemctl reload cloudflared` won't work
+and you must **plan on a restart**. That means **a few seconds of CRM downtime** while cloudflared
+bounces (the CRM's own uvicorn and data are untouched — only the shared tunnel blips), which is exactly
+why Part E runs on a **quiet evening**.
+
+Before the restart, **validate** the new config (changes nothing live):
+```bash
+cloudflared tunnel ingress validate
+```
+Confirm the unit has no reload, read-only (empty output = no reload, restart required):
+```bash
+systemctl show cloudflared -p ExecReload
+```
 
 **⟵ CHECKPOINT:** after Part F, paste the result of its F4 health check and confirm the CRM still loads.
 
