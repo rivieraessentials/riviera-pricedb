@@ -343,3 +343,30 @@ def test_offer_export_fills_template_and_filters_brand(client):
     only = client.get(f"/batches/{multi}/offers", params={"brand": "Alpha"}).json()
     assert len(only["lines"]) == 1 and only["lines"][0]["ean"] == ean_a
     assert only["brand"] == "Alpha"                      # header shows the viewed brand
+
+
+def test_bulk_assign_brand_moves_unknown_products(client):
+    # two brand-less products start life in the Unknown tab
+    e1, e2 = make_ean("700000000010"), make_ean("700000000011")
+    client.post("/products", json={"ean": e1, "description": "A", "brand": ""})
+    client.post("/products", json={"ean": e2, "description": "B", "brand": ""})
+    unknown = {row["ean"] for row in client.get("/grid", params={"unknown": 1}).json()["rows"]}
+    assert e1 in unknown and e2 in unknown
+
+    # bulk-assign both (plus a missing EAN) to a new brand in one call
+    r = client.post("/products/assign-brand",
+                    json={"eans": [e1, e2, "9999999999999"], "brand": "NewBrand"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["assigned"] == 2 and body["brand"] == "NewBrand"
+    assert "9999999999999" in body["missing"]
+
+    # they left Unknown for NewBrand
+    unknown2 = {row["ean"] for row in client.get("/grid", params={"unknown": 1}).json()["rows"]}
+    assert e1 not in unknown2 and e2 not in unknown2
+    moved = {row["ean"] for row in client.get("/grid", params={"brand": "NewBrand"}).json()["rows"]}
+    assert e1 in moved and e2 in moved
+
+    # a blank brand is rejected
+    assert client.post("/products/assign-brand",
+                       json={"eans": [e1], "brand": ""}).status_code == 422

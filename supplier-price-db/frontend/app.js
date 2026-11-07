@@ -233,6 +233,7 @@ let reqOpen = {};           // customer -> expanded? (request history accordion)
 let _lastReqCusts = [];     // customers in the last-rendered history (for expand/collapse all)
 const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
 let _gridRows = {}, _curCols = [], _gridProds = [], _gridCols = [], _gridShowDiff = false;
+let unkSel = new Set();   // Unknown-brands tab: EANs ticked for bulk brand assignment
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
 const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, customers: [], currencies: ["EUR"] };
 let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null;
@@ -283,6 +284,7 @@ VIEWS.rankings = async function (c, _retried) {
   if (activeBrand !== UNK && (!activeBrand || !brands.some(b => b.name === activeBrand)))
     activeBrand = brands.length ? brands[0].name : UNK;
   const unknown = activeBrand === UNK;
+  if (!unknown) unkSel.clear();   // the tick selection only lives on the Unknown tab
   const terr = terrFilter !== "all" ? "&territory=" + terrFilter : "";
   const ccy = curFilter !== "all" ? "&currency=" + encodeURIComponent(curFilter) : "";
   let data;
@@ -314,6 +316,18 @@ VIEWS.rankings = async function (c, _retried) {
     `<div class="pill ${unknown ? "active" : ""}" data-act="brand" data-brand="${UNK}" style="margin-left:6px" title="products whose brand isn't known yet — they move to a brand's tab when a branded offer for that EAN is imported">❓ Unknown</div>` + "</div>";
   if (letterBrands.length) h += '<div class="pills">' + letterBrands.map(b => `<div class="pill ${b.name === activeBrand ? "active" : ""}" data-act="brand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") + "</div>";
   h += `<div class="cmprow"><b>Compare →</b> tick the ☆ in two column headers to show a Δ% column. ${(cmpA || cmpB) ? '<button class="sm" data-act="cmpclear">clear</button>' : '<span class="muted">(then the grid narrows to those two)</span>'}</div>`;
+  // Unknown-brands tab: bulk-assign a brand to several ticked products at once (prototype-style).
+  if (unknown) {
+    const bopts = brandList().map(b => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
+    h += `<div class="toolbar" style="justify-content:flex-start;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:8px 10px;margin-bottom:8px">
+      <b>Bulk assign →</b> tick products, pick a brand, Assign.
+      <button class="sm" data-act="unkselectall">Select all shown</button>
+      <span class="muted"><span id="unksel-count">${unkSel.size}</span> selected</span>
+      <span style="flex:1"></span>
+      <select id="unkbrand" style="max-width:220px"><option value="">— choose brand —</option>${bopts}</select>
+      <button class="primary sm" data-act="bulkassign">Assign to brand</button>
+      <button class="sm" data-act="unkclear">clear</button></div>`;
+  }
 
   let prods = data.rows.slice();
   if (searchQ.trim()) { const q = searchQ.toLowerCase(); prods = prods.filter(p => p.ean.includes(q) || (p.description || "").toLowerCase().includes(q)); }
@@ -352,7 +366,9 @@ VIEWS.rankings = async function (c, _retried) {
   prods.forEach(p => {
     const best = p.best_eur == null ? null : parseFloat(p.best_eur);
     h += `<tr class="${p.is_bestseller ? "best-row" : ""}">
-      <td class="c-star"><span class="star ${p.is_bestseller ? "on" : ""}" data-act="best" data-ean="${esc(p.ean)}">${p.is_bestseller ? "★" : "☆"}</span></td>
+      <td class="c-star">${unknown
+        ? `<input type="checkbox" data-act="unkselect" data-ean="${esc(p.ean)}" ${unkSel.has(p.ean) ? "checked" : ""} title="select for bulk brand assignment" style="width:auto;cursor:pointer"/>`
+        : `<span class="star ${p.is_bestseller ? "on" : ""}" data-act="best" data-ean="${esc(p.ean)}">${p.is_bestseller ? "★" : "☆"}</span>`}</td>
       <td class="c-ean lx" style="cursor:pointer" title="edit brand / description" data-act="prodedit" data-ean="${esc(p.ean)}">${esc(p.ean)}</td>
       <td class="c-prod lx editable" title="click to edit the description" data-act="descedit" data-ean="${esc(p.ean)}">${p.description ? esc(p.description) : '<span class="muted">⚠ no description</span>'}</td>`;
     if (showDiff) { const d = diffPct(p);
@@ -416,6 +432,25 @@ function extractGrid() {
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
   toast("Extracted " + prods.length + " products.");
+}
+// Bulk-assign a brand to the ticked Unknown-brands products (prototype-style). One server call moves
+// them all; the brand is created if new. They leave the Unknown tab for the chosen brand's tab.
+async function doBulkAssign() {
+  const sel = document.getElementById("unkbrand");
+  const brand = sel ? sel.value : "";
+  if (!brand) { toast("Choose a brand to assign to."); return; }
+  if (!unkSel.size) { toast("Tick at least one product first."); return; }
+  const eans = [...unkSel];
+  try {
+    const res = await api("POST", "/products/assign-brand", { eans, brand });
+    const n = res && typeof res.assigned === "number" ? res.assigned : eans.length;
+    const miss = res && res.missing ? res.missing.length : 0;
+    unkSel.clear();
+    await loadStore();
+    activeBrand = brand; brandLetter = null; sortCol = null; cmpA = cmpB = "";
+    render();
+    toast("Assigned " + n + " product" + (n === 1 ? "" : "s") + " to " + brand + (miss ? " (" + miss + " not found)" : "") + ".");
+  } catch (e) { toast(e.message); }
 }
 function toolbarHTML(currencies) {
   currencies = currencies || [];
@@ -1076,6 +1111,10 @@ document.addEventListener("click", e => {
     case "addfile": pickFile("addfile", startOfferImport); break;
     case "addline": addLineModal(); break;
     case "extractgrid": extractGrid(); break;
+    case "unkselect": { const e = el.dataset.ean; if (unkSel.has(e)) unkSel.delete(e); else unkSel.add(e); const cc = document.getElementById("unksel-count"); if (cc) cc.textContent = unkSel.size; break; }
+    case "unkselectall": { const eans = (_gridProds || []).map(p => p.ean); const all = eans.length && eans.every(e => unkSel.has(e)); eans.forEach(e => all ? unkSel.delete(e) : unkSel.add(e)); render(); break; }
+    case "unkclear": unkSel.clear(); render(); break;
+    case "bulkassign": doBulkAssign(); break;
     case "reqfile": pickFile("reqfile", startRequestUpload); break;
     case "runsrc": runSourcing(); break;
     case "openreq": openRequestDetail(id); break;

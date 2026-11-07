@@ -136,6 +136,11 @@ class BrandMerge(BaseModel):
     into_brand: str                        # the brand to keep
 
 
+class BrandAssign(BaseModel):
+    eans: list[str]                        # products to move (typically from the Unknown-brands tab)
+    brand: str                             # brand to assign them all to; created if new
+
+
 class RequestLineIn(BaseModel):
     ean: str
     target_price: str | None = None        # exact decimal string; None = no target (supply overview)

@@ -20,7 +20,7 @@ from . import db, export, fx, importer, money, offer_types, repo, sourcing, vali
 from .auth import Identity, require_identity
 from .config import Config, load_config
 from .models import (
-    BatchCreate, BatchOut, BestsellerSet, BrandMerge, CurrentBestOut, EndOfferOut, FxManualRate,
+    BatchCreate, BatchOut, BestsellerSet, BrandAssign, BrandMerge, CurrentBestOut, EndOfferOut, FxManualRate,
     FxRatesOut, FxRefreshOut, OffersCreate, OffersCreated, OfferHistoryItem, ProductCreate,
     ProductOffersOut, ProductUpdate, RequestCreate, ReviewItem, SupplierCreate, SupplierOut,
     SupplierUpdate,
@@ -472,6 +472,27 @@ def create_app(config: Config | None = None) -> FastAPI:
             touched = repo.get_product_by_ean(conn, ean)
             repo.rebuild_current_best(conn, [int(touched["product_id"])])
             return {"ean": ean, "ok": True}
+
+    @app.post("/products/assign-brand")
+    def assign_brand_bulk(body: BrandAssign, who: Identity = Depends(require_identity)):
+        """Bulk-assign one brand to several products (the Unknown-brands tab: select rows, pick a brand).
+        Creates the brand if new. Brand is per-product metadata and does not affect prices, so the
+        current_best cache is untouched. Returns how many moved and any EANs not found."""
+        brand = validate.text_or_400(body.brand, "brand")
+        if not brand or not brand.strip():
+            raise HTTPException(422, detail="brand is required")
+        validate.count_or_400(len(body.eans), validate.MAX_OFFER_ROWS, "eans")
+        with get_conn() as conn:
+            brand_id = repo.get_or_create_brand(conn, brand.strip())
+            assigned, missing = 0, []
+            for raw in body.eans:
+                prod = repo.get_product_by_ean(conn, str(raw).strip())
+                if prod is None:
+                    missing.append(str(raw))
+                    continue
+                repo.assign_brand(conn, int(prod["product_id"]), brand_id)
+                assigned += 1
+            return {"brand": brand.strip(), "assigned": assigned, "missing": missing}
 
     @app.post("/products/{ean}/bestseller")
     def set_bestseller(ean: str, body: BestsellerSet, who: Identity = Depends(require_identity)):
