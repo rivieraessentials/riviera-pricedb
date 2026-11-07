@@ -296,3 +296,43 @@ def test_request_non_eur_target_uses_fx(client):
     req = client.post("/requests", json={
         "margin": "0.07", "lines": [{"ean": ean, "target_price": "15.00", "currency": "GBP"}]}).json()
     assert req["ok"] == 1 and req["results"][0]["target_eur"] == "18.75"
+
+
+def test_offer_export_fills_template_and_filters_brand(client):
+    """Export fills the owner's .xlsx template (styling + Total formula preserved) and, for a
+    multi-brand supplier offer, exports only the brand being viewed, with the margin applied."""
+    import io
+
+    import openpyxl
+
+    s = _supplier(client, "D&G Supplier")
+    ean_a = make_ean("500000000101")
+    ean_b = make_ean("500000000102")
+    _import(client, s, "Alpha", ean_a, "10.00", date="2026-10-01")   # establish the two brands
+    _import(client, s, "Beta", ean_b, "20.00", date="2026-10-01")
+    multi = client.post("/batches", json={
+        "supplier_id": s, "currency": "EUR", "kind": "price_list", "brand": "(multi-brand)",
+        "received_date": "2026-11-01", "territory": "T2", "fx_rate_eur": "1"}).json()["batch_id"]
+    client.post("/offers", json={"batch_id": multi, "brand_mode": "multi", "brand": None, "offers": [
+        {"ean": ean_a, "quoted_price": "11.00", "description": "ALPHA PROD"},
+        {"ean": ean_b, "quoted_price": "21.00", "description": "BETA PROD"}]})
+
+    r = client.get(f"/batches/{multi}/export", params={"margin": "0.07", "brand": "Alpha"})
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
+    # template fidelity: the header keeps its bold + fill, and the Total formula survives
+    assert ws["A9"].value == "EAN" and ws["A9"].font.bold and ws["A9"].fill.patternType == "solid"
+    assert ws["E10"].value == "=D10*C10"
+    # only Alpha's line, from row 10, margin applied: 11.00 / (1-0.07) = 11.83
+    assert ws["A10"].value == ean_a and ws["B10"].value == "Prod " + ean_a
+    assert round(float(ws["C10"].value), 2) == 11.83
+    assert ws["A11"].value is None                       # Beta's line is excluded
+
+    ws2 = openpyxl.load_workbook(io.BytesIO(
+        client.get(f"/batches/{multi}/export", params={"margin": "0.07", "brand": "Beta"}).content)).active
+    assert ws2["A10"].value == ean_b and ws2["A11"].value is None
+    assert round(float(ws2["C10"].value), 2) == 22.58    # 21.00 / 0.93
+
+    # a margin of 100%+ is rejected
+    assert client.get(f"/batches/{multi}/export", params={"margin": "1.5"}).status_code == 422

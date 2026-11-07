@@ -135,18 +135,23 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
 
 ## 7b. Exporting an offer (owner's template)
 
-- The offer-detail **⤓ Export** fills the owner's own **offer template** (`frontend/offer_template.xls`,
-  served at `/static/offer_template.xls`): data rows start at **row 10** (header in row 9), columns
+- The offer-detail **⤓ Export** returns the owner's own **offer template** with the offer filled in,
+  looking **exactly** like the owner's file — same layout, colours, borders, fonts and formulas.
+- **Built on the server**, not in the browser: `GET /batches/{id}/export?margin=&brand=` loads the
+  template with **openpyxl** and fills it. This is deliberate — the browser SheetJS (community) writer
+  **drops all fonts, fills and borders** (it writes number formats only), so a browser-built file lost
+  the colours/layout. openpyxl preserves every style and formula of the untouched cells.
+- The template is **`backend/app/assets/offer_template.xlsx`** — converted **once** from the owner's
+  supplied `.xls` via Excel (lossless). Data rows start at **row 10** (header row 9); columns
   **A = EAN, B = Description, C = Price, D = Quantity, E = Total**. The export writes **A, B and C
   only**; **Quantity (D)** and the header block (Offer / MOQ / Terms / ExW / Lead time / Currency) are
-  left for the owner. **Total (E) keeps its `= D*C` formula** per row, so the total computes once the
-  owner types a quantity.
+  left for the owner. **Total (E) keeps its `= D*C` formula** per row.
 - **Margin is asked each time** (default 7%). Price = **offer cost ÷ (1 − margin)**, in **EUR**,
   rounded to 2 decimals — the same margin basis as customer requests. (Falls back to the offer's
-  original-currency price only if no EUR value is available.)
-- Written as **`.xlsx`** (not `.xls`): the SheetJS community build drops cell **formulas** when writing
-  `.xls`, so `.xls` output would lose the Total formula. `.xlsx` round-trips the template's formulas,
-  euro number formats, fills and column widths intact — it is still a native Excel file.
+  original-currency per-piece price if the batch has no EUR rate, e.g. a USD offer with no USD FX.)
+- **Brand-scoped:** the export includes **only the lines of the brand currently being viewed**
+  (`brand=` = the active Offers tab). So a **multi-brand supplier offer exports just that one brand**,
+  never the whole multi-brand list. `brand=__unknown__` exports the no-brand-yet products.
 
 ## 8. Uploading (UX)
 

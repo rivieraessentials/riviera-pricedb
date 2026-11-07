@@ -29,3 +29,6 @@ uploads/
 # Python caches
 __pycache__/
 *.pyc
+
+# local server logs
+supplier-price-db/backend/uvicorn.*.log

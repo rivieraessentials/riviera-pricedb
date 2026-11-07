@@ -14,10 +14,45 @@ import tempfile
 import zipfile
 from datetime import date as _date
 from decimal import Decimal
+from pathlib import Path
+
+import openpyxl
 
 from . import money, offer_types
 
 _CENT = Decimal("0.01")
+
+# The owner's own offer template (converted once from the supplied .xls, keeping its colours,
+# borders, fonts and the Total = Price × Quantity formulas). We fill the data rows and leave the
+# rest untouched, so the export looks exactly like the owner's format.
+_TEMPLATE = Path(__file__).resolve().parent / "assets" / "offer_template.xlsx"
+_DATA_START_ROW = 10        # table header is row 9; data begins at row 10
+_COL_EAN, _COL_DESC, _COL_PRICE, _COL_QTY, _COL_TOTAL = 1, 2, 3, 4, 5
+
+
+def fill_offer_template(lines: list[dict]) -> bytes:
+    """Return xlsx bytes of the owner's offer template with EAN / Description / Price filled in.
+
+    Each line is {"ean", "description", "price"} where price is a per-piece number with the margin
+    already applied (or None if it could not be computed). Quantity and the header block are left
+    empty for the owner; the Total column keeps its per-row = Quantity × Price formula. openpyxl
+    preserves the template's styling and formulas (the browser xlsx writer drops them)."""
+    wb = openpyxl.load_workbook(_TEMPLATE)
+    ws = wb.active
+    for i, ln in enumerate(lines):
+        r = _DATA_START_ROW + i
+        ws.cell(row=r, column=_COL_EAN).value = str(ln["ean"])
+        ws.cell(row=r, column=_COL_DESC).value = ln.get("description") or ""
+        price = ln.get("price")
+        if price is not None:
+            ws.cell(row=r, column=_COL_PRICE).value = float(price)
+        # the template pre-fills the Total formula for ~1200 rows; add it if a longer offer runs past
+        tot = ws.cell(row=r, column=_COL_TOTAL)
+        if not (isinstance(tot.value, str) and tot.value.startswith("=")):
+            tot.value = f"=D{r}*C{r}"
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
 
 
 def _snapshot_sqlite(db_path: str) -> bytes:

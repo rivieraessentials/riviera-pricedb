@@ -666,7 +666,13 @@ async function saveLine() {
 
 // ---------- offer details / export / delete / end ----------
 async function openOfferDetails(bid) {
-  const b = await apiGet("/batches/" + bid + "/offers");
+  // open the window immediately with a loading state, so a click ALWAYS shows something, and never
+  // fails silently if the fetch is slow or errors (that was the "details don't always appear" bug).
+  openModal(`<div class="detail-header"><div><h2>Offer</h2></div><div class="x" data-act="closemodal">×</div></div>
+     <div class="detail-body"><div class="muted" style="padding:24px">Loading offer…</div></div>`);
+  let b;
+  try { b = await apiGet("/batches/" + bid + "/offers"); }
+  catch (e) { closeModal(); toast("Could not open the offer: " + (e && e.message ? e.message : e)); return; }
   const rows = b.lines.map(o => `<tr><td class="muted">${esc(o.ean)}</td><td>${esc(o.description || "")}</td><td class="num">${fmt(o.price_eur)}</td></tr>`).join("");
   const st = (l, v) => `<div class="stat"><div class="stat-label">${esc(l)}</div><div class="stat-value" style="font-size:14px">${esc(v || "—")}</div></div>`;
   const endBtn = (b.kind === "stock_offer" && !b.ended_at) ? `<button class="sm" data-act="endoffer" data-bid="${b.batch_id}">⏹ End offer</button>` : "";
@@ -679,13 +685,14 @@ async function openOfferDetails(bid) {
    </div>`);
   window.__offerCache = b;
 }
-// Export fills the owner's offer template (EAN / Description / Price), applying a margin the owner
-// picks each time. Everything else in the template (MOQ, Terms, ExW, Currency, Quantity and the
-// Total = Price × Quantity formula) is left for the owner to fill. Written as .xlsx so the template's
-// formulas, number formats and styling survive (writing .xls would drop the Total formulas).
+// Export is built on the SERVER (GET /batches/{id}/export) so the owner's real .xlsx template —
+// its colours, borders, fonts, number formats and the Total = Price × Quantity formulas — is kept
+// exactly (the browser's xlsx writer drops styling). The owner picks a margin each time, and only
+// the lines of the brand currently being viewed are exported (even from a multi-brand supplier).
 function exportOffer(bid) {
+  const brand = activeBrand && activeBrand !== "__unknown__" ? activeBrand : (activeBrand === "__unknown__" ? "Unknown-brand" : "");
   openModal(`<div class="detail-header"><div><h2>Export offer</h2>
-      <div class="sub">Fills EAN, Description and Price into your offer template — you fill in the rest.</div></div>
+      <div class="sub">Fills EAN, Description and Price into your offer template — you fill in the rest.${brand ? " Only <b>" + esc(brand) + "</b> lines are exported." : ""}</div></div>
       <div class="x" data-act="closemodal">×</div></div>
     <div class="detail-body">
       <div class="fl">Margin to apply (%)</div>
@@ -700,33 +707,25 @@ function exportOffer(bid) {
 }
 async function doExportOffer(bid) {
   const mv = parseFloat((document.getElementById("exp-margin") || {}).value);
-  const margin = (isFinite(mv) ? mv : 7) / 100;
-  if (margin < 0 || margin >= 1) { toast("Margin must be between 0 and 99%."); return; }
-  const b = window.__offerCache && window.__offerCache.batch_id == bid ? window.__offerCache : await apiGet("/batches/" + bid + "/offers");
-  let tbuf;
-  try { tbuf = await fetch("/static/offer_template.xls").then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); }); }
-  catch (e) { toast("Could not load the offer template."); return; }
-  const wb = XLSX.read(new Uint8Array(tbuf), { type: "array", cellStyles: true, cellNF: true, cellFormula: true });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const EURFMT = '"€"\\ #,##0.00';
-  const START = 10;                                  // data rows begin at row 10 (header is row 9)
-  const enc = (c, r) => XLSX.utils.encode_cell({ c: c, r: r });
-  b.lines.forEach((o, i) => {
-    const r0 = START - 1 + i, r1 = r0 + 1;            // 0-based cell row, 1-based for formulas
-    const cost = o.price_eur != null ? parseFloat(o.price_eur) : (o.price_original != null ? parseFloat(o.price_original) : null);
-    const sell = cost != null ? Math.round(cost / (1 - margin) * 100) / 100 : null;
-    ws[enc(0, r0)] = { t: "s", v: String(o.ean) };                       // A: EAN
-    ws[enc(1, r0)] = { t: "s", v: o.description || "" };                 // B: Description
-    if (sell != null) ws[enc(2, r0)] = { t: "n", v: sell, z: EURFMT };   // C: Price (margin applied)
-    const ec = enc(4, r0);                                                // E: Total = Price × Quantity
-    if (!ws[ec] || !ws[ec].f) ws[ec] = { t: "n", v: 0, f: "D" + r1 + "*C" + r1, z: EURFMT };
-  });
-  const lastRow = Math.max(1230, START - 1 + b.lines.length);
-  ws["!ref"] = "A1:G" + lastRow;
-  const fn = ((b.supplier || "offer") + "_" + (b.brand || "") + "_" + (b.received_date || "") + "_offer.xlsx").replace(/[^\w.-]+/g, "_");
-  XLSX.writeFile(wb, fn, { bookType: "xlsx" });
+  const marginPct = isFinite(mv) ? mv : 7;
+  if (marginPct < 0 || marginPct >= 100) { toast("Margin must be between 0 and 99%."); return; }
+  const margin = marginPct / 100;
+  const b = window.__offerCache && window.__offerCache.batch_id == bid ? window.__offerCache : null;
+  const brand = activeBrand || "";
+  const url = "/batches/" + bid + "/export?margin=" + encodeURIComponent(String(margin)) +
+    (brand ? "&brand=" + encodeURIComponent(brand) : "");
+  let resp;
+  try { resp = await fetch(url, { headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }); }
+  catch (e) { toast("Export failed: " + e.message); return; }
+  if (!resp.ok) { let msg = "HTTP " + resp.status; try { const j = await resp.json(); if (j.detail) msg = j.detail; } catch (e) {} toast("Export failed: " + msg); return; }
+  const blob = await resp.blob();
+  const brandLabel = brand && brand !== "__unknown__" ? brand : (brand === "__unknown__" ? "Unknown" : ((b && b.brand) || ""));
+  const fn = (((b && b.supplier) || "offer") + "_" + brandLabel + "_" + ((b && b.received_date) || "") + "_offer.xlsx").replace(/[^\w.-]+/g, "_");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fn;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
   closeModal();
-  toast(b.lines.length + " line(s) exported — " + (margin * 100).toFixed(1).replace(/\.0$/, "") + "% margin applied.");
+  toast("Exported — " + marginPct.toFixed(1).replace(/\.0$/, "") + "% margin" + (brand && brand !== "__unknown__" ? " · " + brand : "") + ".");
 }
 function deleteBatch(bid) {
   confirmModal("Delete this offer column? This permanently removes the batch and its price lines.", async () => {

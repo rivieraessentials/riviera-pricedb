@@ -6,6 +6,7 @@ production; JWT verification here is defence-in-depth and OFF by default in dev 
 from __future__ import annotations
 
 import os
+import re
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date as _date
 from decimal import Decimal, InvalidOperation
@@ -337,6 +338,57 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "kind_label": offer_types.kind_label(b["kind"]), "ended_at": b["ended_at"],
                 "moq": b["moq"], "lead_time": b["lead_time"], "notes": b["notes"],
                 "source_file": b["source_file"], "lines": lines}
+
+    @app.get("/batches/{batch_id}/export")
+    def export_offer(batch_id: int, margin: str = "0.07", brand: str | None = None,
+                     who: Identity = Depends(require_identity)):
+        """Fill the owner's offer template with this batch's lines (EAN / Description / Price).
+
+        `margin` (decimal fraction) raises the price to a sell price: sell = cost / (1 - margin),
+        in EUR (falls back to the offer's original currency if no FX rate). `brand` restricts the
+        export to that brand's lines only, so a multi-brand supplier offer exports just the brand
+        the owner is viewing. '__unknown__' means products with no brand yet."""
+        try:
+            m = Decimal(margin)
+        except (InvalidOperation, TypeError, ValueError):
+            raise HTTPException(422, detail="margin must be a decimal fraction, e.g. 0.07")
+        if m < 0 or m >= 1:
+            raise HTTPException(422, detail="margin must be between 0 and 1 (0%–99%)")
+        with get_conn() as conn:
+            b = conn.execute(
+                "SELECT b.*, s.name AS supplier_name FROM offer_batches b "
+                "JOIN suppliers s ON s.supplier_id = b.supplier_id WHERE b.batch_id = ?",
+                (batch_id,)).fetchone()
+            if b is None:
+                raise HTTPException(404, detail=f"batch {batch_id} not found")
+            rate = b["fx_rate_eur"] or ("1" if (b["currency"] or "").upper() == "EUR" else None)
+            sql = ("SELECT o.price_original, p.ean, p.description FROM offers o "
+                   "JOIN products p ON p.product_id = o.product_id WHERE o.batch_id = ?")
+            params: list = [batch_id]
+            if brand == "__unknown__":
+                sql += " AND p.brand_id IS NULL"
+            elif brand:
+                br = repo.get_brand_by_name(conn, brand)
+                if br is None:
+                    raise HTTPException(404, detail=f"brand {brand!r} not found")
+                sql += " AND p.brand_id = ?"
+                params.append(int(br["brand_id"]))
+            sql += " ORDER BY o.price_original"
+            lines = []
+            for r in conn.execute(sql, params):
+                cost = (money.unit_price_eur(r["price_original"], rate) if rate
+                        else money.from_minor(r["price_original"]))
+                sell = (cost / (Decimal(1) - m)).quantize(money.CENT)
+                lines.append({"ean": r["ean"], "description": r["description"] or "",
+                              "price": float(sell)})
+            label_brand = "" if (not brand or brand == "__unknown__") else brand
+            fname = f"{b['supplier_name'] or 'offer'}_{label_brand}_{b['received_date'] or ''}_offer.xlsx"
+        content = export.fill_offer_template(lines)
+        fname = re.sub(r"[^\w.-]+", "_", fname).strip("_") or "offer.xlsx"
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
     @app.delete("/batches/{batch_id}")
     def delete_batch(batch_id: int, who: Identity = Depends(require_identity)):

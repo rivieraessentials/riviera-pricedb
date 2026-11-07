@@ -6,6 +6,8 @@ uvicorn==0.54.0
 # JWT verification for Cloudflare Access (OFF by default in local dev; see app/auth.py).
 # The 'crypto' extra pulls in `cryptography` for RS256.
 PyJWT[crypto]==2.15.1
+# Fills the owner's .xlsx offer template on export, keeping its styling and formulas.
+openpyxl==3.1.5
 
 # Dev/test only:
 httpx==0.28.1          # FastAPI TestClient
