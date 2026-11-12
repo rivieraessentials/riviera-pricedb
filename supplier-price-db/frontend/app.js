@@ -297,7 +297,9 @@ async function render() {
   document.getElementById("foot-stats").textContent = store.brands.length + " brands · " + store.suppliers.length + " suppliers";
   buildCurSelect(); applyZoom();
   try { const rv = await apiGet("/review"); document.getElementById("nav-review").textContent = (rv || []).length; } catch (e) {}
-  const c = document.getElementById("content"); c.innerHTML = '<div class="muted" style="padding:20px">Loading…</div>';
+  const c = document.getElementById("content");
+  c.classList.toggle("is-grid", view === "rankings");   // Offers grid fills height (see styles.css .is-grid)
+  c.innerHTML = '<div class="muted" style="padding:20px">Loading…</div>';
   try { await VIEWS[view](c); } catch (e) { c.innerHTML = '<div class="alert alert-amber">Could not load: ' + esc(e.message) + "</div>"; }
   if (_focusId) { const el = document.getElementById(_focusId); if (el) { el.focus(); try { const n = el.value.length; el.setSelectionRange(n, n); } catch (e) {} } _focusId = null; }
 }

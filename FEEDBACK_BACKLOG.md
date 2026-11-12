@@ -8,8 +8,10 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
   recognised as EANs, so the EAN column wasn't detected and the file failed. Fixed 2026-11-12: `eanCanon`
   (frontend) + `importer.canon_ean` (backend) left-pad 11/12-digit UPC-A to a valid EAN-13. Verified on the
   real file (69/75 codes recovered, all check-digit valid); owner to confirm the full import in the app.
-- ☐ **Table doesn't fit / right-hand columns cut off; doesn't adapt on window resize** — Offers grid needs
-  to fit + scroll horizontally and reflow on min/max.
+- ✅ **Table doesn't fit / right-hand columns cut off; doesn't adapt on window resize** (2026-11-12) — the
+  Offers grid now fills the remaining viewport height (flex) so its horizontal scrollbar is always pinned
+  at the bottom and reachable; supplier columns scroll inside the grid with EAN + Product frozen, and it
+  reflows on any window size. `.content.is-grid` in styles.css + a class toggle in render().
 - ☐ **Can't merge "L'Oréal Professionnel" vs "L'ORÉAL PROFESSIONNEL"** — case-only duplicate brands; need a
   merge and case-insensitive brand matching going forward.
 
