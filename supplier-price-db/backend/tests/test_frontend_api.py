@@ -108,6 +108,24 @@ def test_size_description_is_corrected_on_reimport(client):
     assert client.get(f"/products/{ean}/offers").json()["description"] == "Sensibio H2O"
 
 
+def test_merge_case_accent_variant_brands(client):
+    """Two brands differing only by letter case/accents coexist because SQLite's NOCASE folds only
+    ASCII (é != É), so "L'Oréal Professionnel" and "L'ORÉAL PROFESSIONNEL" are distinct rows — they
+    must still be mergeable (the frontend's case-insensitive guard used to block exactly this)."""
+    s1 = _supplier(client, "Dist")
+    e1 = make_ean("500000000421"); e2 = make_ean("500000000438")
+    _import(client, s1, "L'Oréal Professionnel", e1, "9.00")
+    _import(client, s1, "L'ORÉAL PROFESSIONNEL", e2, "8.00")
+    names = {b["name"] for b in client.get("/brands").json()}
+    assert {"L'Oréal Professionnel", "L'ORÉAL PROFESSIONNEL"} <= names   # both exist (accent-case distinct)
+    r = client.post("/brands/merge", json={"from_brand": "L'ORÉAL PROFESSIONNEL", "into_brand": "L'Oréal Professionnel"})
+    assert r.status_code == 200, r.text
+    assert r.json()["products_moved"] == 1
+    after = {b["name"] for b in client.get("/brands").json()}
+    assert "L'ORÉAL PROFESSIONNEL" not in after and "L'Oréal Professionnel" in after
+    assert client.get(f"/products/{e2}/offers").json()["brand"] == "L'Oréal Professionnel"
+
+
 def test_merge_brands_moves_products_and_removes_source(client):
     s1 = _supplier(client, "Alpha")
     e1 = make_ean("500000000407"); e2 = make_ean("500000000414")

@@ -710,7 +710,10 @@ async function doMergeBrands() {
   const from = (document.getElementById("mg-from").value || "").trim();
   const into = (document.getElementById("mg-into").value || "").trim();
   if (!from || !into) { toast("Pick both brands."); return; }
-  if (from.toLowerCase() === into.toLowerCase()) { toast("Pick two different brands."); return; }
+  // Compare the exact names, NOT case-insensitively: the whole point is to merge two brands that differ
+  // only by case/accents (e.g. "L'Oréal Professionnel" vs "L'ORÉAL PROFESSIONNEL"), which coexist
+  // because SQLite's NOCASE folds only ASCII. Only a literally identical pick is "the same brand".
+  if (from === into) { toast("Pick two different brands."); return; }
   try {
     const r = await api("POST", "/brands/merge", { from_brand: from, into_brand: into });
     await loadStore(); activeBrand = r.into; brandLetter = letterOf(r.into); closeModal(); render();

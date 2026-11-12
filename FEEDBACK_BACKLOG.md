@@ -12,8 +12,13 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
   Offers grid now fills the remaining viewport height (flex) so its horizontal scrollbar is always pinned
   at the bottom and reachable; supplier columns scroll inside the grid with EAN + Product frozen, and it
   reflows on any window size. `.content.is-grid` in styles.css + a class toggle in render().
-- ☐ **Can't merge "L'Oréal Professionnel" vs "L'ORÉAL PROFESSIONNEL"** — case-only duplicate brands; need a
-  merge and case-insensitive brand matching going forward.
+- ✅ **Can't merge "L'Oréal Professionnel" vs "L'ORÉAL PROFESSIONNEL"** (2026-11-12) — the Merge-brands
+  dialog refused because its guard compared names with `toLowerCase()`, which folds accents, so the two
+  variants looked identical. Fixed to compare the exact names; the two accent-case variants now merge
+  (backend already handled it — covered by a new test). `doMergeBrands()` in app.js.
+- ☐ **Prevent future case/accent brand duplicates** — SQLite NOCASE folds only ASCII, so `get_or_create_brand`
+  treats "L'Oréal"/"L'ORÉAL" as different and creates both. Make brand matching Unicode-case-insensitive
+  (casefold) so duplicates don't form in the first place. Needs care with existing data; separate change.
 
 ## 🎨 UI improvements
 - ✅ **No-brand import warning** (2026-11-12) — when Multi-brand is chosen but the file has no brand
