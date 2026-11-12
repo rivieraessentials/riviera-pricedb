@@ -95,6 +95,7 @@ table.grid tbody tr:hover td{background:var(--blue-bg)!important}
 thead .c-star,thead .c-ean,thead .c-prod{z-index:4;background:var(--bg3)}
 tr.best-row .c-star,tr.best-row .c-ean,tr.best-row .c-prod,tr.best-row td{background:var(--amber-bg)}
 tr.best-row:hover td{background:#fbeecb!important}
+tr.bs-sep td,tr.bs-sep .c-star,tr.bs-sep .c-ean,tr.bs-sep .c-prod{border-top:2px solid var(--border2)}
 .pricecell{font-variant-numeric:tabular-nums}
 .pricecell.best{background:var(--green-bg)!important;color:var(--green);font-weight:700;box-shadow:inset 3px 0 0 var(--green)}
 .pricecell.synth{color:var(--text3);font-style:italic}

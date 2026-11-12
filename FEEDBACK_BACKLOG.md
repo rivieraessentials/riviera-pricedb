@@ -40,6 +40,11 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
 - ✅ **Respect hidden rows** in the uploaded Excel file (2026-11-12) — rows hidden in the Excel file are
   now dropped on import. The parsers read with `cellStyles:true` (so SheetJS exposes `!rows[i].hidden`)
   and filter them out (`sheetRows()` helper). Verified against a generated hidden-row file.
+- ✅ **Best-sellers to the top of a brand tab** (2026-11-12) — in the Offers grid, a brand's ★ best-sellers
+  now float to the top of the list (they were appearing mid-list), with a subtle divider line below the
+  block; within the best-seller and the non-best-seller groups the current sort order is kept (stable sort
+  applied after the user's sort). Brand tabs only — the Unknown tab is unchanged. Frontend only; no
+  prototype to follow (`prototype.html` was superseded, design note 14). `best-row` + new `bs-sep` in app.js/styles.css.
 
 ## ⚖️ Needs an owner decision (conflict with the append-only "a correction is a new offer, never an edit" rule)
 - ◐ **Edit a price manually in Offers** — true inline edit, or a "manual offer" that supersedes and keeps

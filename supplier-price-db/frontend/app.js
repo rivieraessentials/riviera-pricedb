@@ -393,6 +393,10 @@ VIEWS.rankings = async function (c, _retried) {
   else if (!activeSort) prods.sort((a, b) => (a.description || "~").localeCompare(b.description || "~"));
   else { const BIG = 1e18; const val = (p) => { if (activeSort === "ean") return parseFloat(p.ean) || 0; if (activeSort === "prod") return (p.description || "").toLowerCase(); if (activeSort === "diff") { const v = diffPct(p); return v == null ? -BIG : v; } if (activeSort === "best") { const m = p.best_eur == null ? null : parseFloat(p.best_eur); return m == null ? -BIG : m; } if (activeSort[0] === "b") { const v = priceOf(p, +activeSort.slice(1)); return v == null ? -BIG : v; } return 0; }; prods = prods.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; }); }
 
+  // Best-sellers float to the TOP of a brand tab (never the Unknown tab), keeping each group's
+  // existing sort order. Array.sort is stable (ES2019+), so equal-key rows stay in their order.
+  if (!unknown) prods = prods.slice().sort((a, b) => (b.is_bestseller ? 1 : 0) - (a.is_bestseller ? 1 : 0));
+
   let cols = bs; if (showDiff) cols = [bs.find(b => b.batch_id == cmpA), bs.find(b => b.batch_id == cmpB)];
   _curCols = bs.map(b => b.batch_id);
   _gridProds = prods; _gridCols = cols; _gridShowDiff = showDiff;   // stash the exact view for Extract to Excel
@@ -418,9 +422,11 @@ VIEWS.rankings = async function (c, _retried) {
         <div class="s2">${esc(fmtDate(b.received_date))} · ${esc(b.kind_label || b.kind || "")}${ended}</div></th>`;
     }).join("") + "</tr></thead><tbody>";
 
-  prods.forEach(p => {
+  const bsTop = unknown ? 0 : prods.filter(p => p.is_bestseller).length;   // rows [0, bsTop) are the floated best-sellers
+  prods.forEach((p, i) => {
     const best = p.best_eur == null ? null : parseFloat(p.best_eur);
-    h += `<tr class="${p.is_bestseller ? "best-row" : ""}">
+    const sep = bsTop && i === bsTop ? " bs-sep" : "";   // divider above the first non-best-seller row
+    h += `<tr class="${p.is_bestseller ? "best-row" : ""}${sep}">
       <td class="c-star">${unknown
         ? `<input type="checkbox" data-act="unkselect" data-ean="${esc(p.ean)}" ${unkSel.has(p.ean) ? "checked" : ""} title="select for bulk brand assignment" style="width:auto;cursor:pointer"/>`
         : `<span class="star ${p.is_bestseller ? "on" : ""}" data-act="best" data-ean="${esc(p.ean)}">${p.is_bestseller ? "★" : "☆"}</span>`}</td>
