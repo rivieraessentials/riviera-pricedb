@@ -79,7 +79,9 @@ function eanCanon(v) {
   let s = String(v).trim().replace(/\s|-/g, "");
   if (s.endsWith(".0")) s = s.slice(0, -2);
   if (!/^\d+$/.test(s)) return null;
-  if (s.length === 12) s = "0" + s;
+  // UPC-A (12) -> EAN-13 by a leading 0; and an 11-digit code is a UPC-A whose leading
+  // zero Excel dropped when it stored the barcode as a number — left-pad both back to 13.
+  if (s.length === 11 || s.length === 12) s = s.padStart(13, "0");
   return s;
 }
 function eanValid(code) {
@@ -89,7 +91,7 @@ function eanValid(code) {
   else d.forEach((x, i) => s += x * (i % 2 === 0 ? 3 : 1));
   return (10 - s % 10) % 10 === chk;
 }
-function looksEan(v) { const c = eanCanon(v); return !!(c && (c.length === 8 || c.length === 12 || c.length === 13)); }
+function looksEan(v) { const c = eanCanon(v); return !!(c && (c.length === 8 || c.length === 13)); }
 // A size is a number followed by a unit (100 ml, 15 Gr, 6 x 50ml, "20 ml + Stick 2 g"); the
 // product description is mainly text. A value is a size when, after dropping numbers, punctuation
 // and known unit words, nothing is left — so the size column is never mistaken for the description.

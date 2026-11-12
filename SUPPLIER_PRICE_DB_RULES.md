@@ -117,6 +117,12 @@ Related docs: [`SUPPLIER_PRICE_DB_DESIGN.md`](SUPPLIER_PRICE_DB_DESIGN.md) (sche
 - The browser parses the file and POSTs only normalized rows; the server validates and stores.
 - **EAN is the key.** New EANs are added; **duplicates are never created.** EAN check-digit is
   validated (EAN-8/-13, UPC-A padded); bad rows go to the **review queue**, never silently dropped.
+  - **UPC-A canonicalisation (2026-11-12):** a 12-digit UPC-A — **and an 11-digit one whose leading
+    zero Excel dropped when it stored the barcode as a number** (e.g. Kenra/Bolmar `14926281245`) — is
+    left-padded to a 13-digit EAN (`0014926281245`) before the check digit is applied, so these files
+    import instead of failing "no EAN column". Done identically in `eanCanon()` (frontend) and
+    `importer.canon_ean()` (backend), so every entry point stores one canonical key. Codes < 11 or
+    > 13 digits are **not** padded (a 7-digit item number is not mistaken for a barcode).
 - Read the **lowest** price among a row's price columns.
 - **Size vs description (owner rule):** the **size** of a product is a numeric value followed by a
   unit (`ml`, `l`, `g`, `gr`, `kg`, `oz`, …), e.g. `100 ml`, `15 Gr`, `200ml`, `20 ml + Stick 2 g`.

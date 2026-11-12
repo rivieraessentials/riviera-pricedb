@@ -110,6 +110,34 @@ def test_multi_empty_brand_falls_back_to_ean_then_unknown(conn):
     assert len(res.offer_ids) == 2
 
 
+# ---- 11-digit UPC-A recovery: Excel dropped the leading zero (§2.6, Kenra/Bolmar files) ----
+
+def test_eleven_digit_upc_leading_zero_recovered(conn):
+    """A Kenra-style 11-digit code (a UPC-A whose leading zero Excel dropped when it stored the
+    barcode as a number) is padded back to a valid EAN-13, stored under that one canonical key,
+    and imported — not sent to review."""
+    sid = repo.create_supplier(conn, "Bolmar")
+    bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1", kind="price_list", brand="Kenra")
+    brand = repo.get_or_create_brand(conn, "Kenra")
+    res = importer.import_rows(conn, bid, [{"ean": "14926281245", "quoted_price": "9.50"}],
+                               brand_id=brand)
+    assert len(res.offer_ids) == 1 and res.review == []
+    assert repo.get_product_by_ean(conn, "0014926281245") is not None      # canonical 13-digit key
+    # the 11-digit form and the full 12-digit UPC resolve to the SAME canonical key
+    assert importer.canon_ean("14926281245") == "0014926281245"
+    assert importer.canon_ean("014926281245") == "0014926281245"
+
+
+def test_short_non_ean_code_still_reviewed(conn):
+    """A 7-digit internal item number (Kenra's SKU column) is NOT mistaken for an EAN — it isn't
+    padded, fails the check, and goes to review (so the fix doesn't over-rescue)."""
+    sid = repo.create_supplier(conn, "S")
+    bid = repo.create_batch(conn, sid, "EUR", fx_rate_eur="1", kind="price_list", brand="K")
+    brand = repo.get_or_create_brand(conn, "K")
+    res = importer.import_rows(conn, bid, [{"ean": "2805268", "quoted_price": "5.00"}], brand_id=brand)
+    assert res.offer_ids == [] and res.review[0]["reason"] == "EAN checksum failed"
+
+
 def test_single_brand_ignores_any_row_brand(conn):
     """A single-brand import (the option OFF / a single-brand file) is unaffected by a brand on the row:
     everything is filed under the picked brand, and the row's brand is never created."""

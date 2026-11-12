@@ -18,9 +18,11 @@ MAX_BODY_BYTES = 16 * 1024 * 1024   # 16 MB request-body ceiling
 
 
 def ean_or_400(ean: str | None) -> str:
-    """Digits + length only (8/12/13). Used where a human may enter an odd-but-real code."""
-    e = (ean or "").strip()
-    if not e.isdigit() or len(e) not in (8, 12, 13):
+    """Canonicalise (11/12-digit UPC-A -> 13) then check digits + length (8/13). Used where a
+    human may enter an odd-but-real code; returns the canonical EAN so every entry point that
+    stores a product uses one key."""
+    e = importer.canon_ean(ean)
+    if not e.isdigit() or len(e) not in (8, 13):
         raise HTTPException(422, detail=f"EAN must be 8, 12 or 13 digits, got {ean!r}")
     return e
 

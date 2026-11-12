@@ -54,14 +54,23 @@ class ImportResult:
     review: list[dict] = field(default_factory=list)   # [{ean, reason}]
 
 
+def canon_ean(code: str | None) -> str:
+    """Canonical barcode form (mirrors eanCanon() in the frontend): strip spaces/hyphens and a
+    trailing '.0' (Excel float), and left-pad an 11- or 12-digit UPC-A to a 13-digit EAN. The
+    11-digit case is a UPC-A whose leading zero Excel dropped when it stored the barcode as a
+    number. Non-digit input is returned stripped so the caller can reject it."""
+    s = (code or "").strip().replace(" ", "").replace("-", "")
+    if s.endswith(".0"):
+        s = s[:-2]
+    if s.isdigit() and len(s) in (11, 12):    # UPC-A (and its leading-zero-dropped form) -> EAN-13
+        s = s.zfill(13)
+    return s
+
+
 def ean_check_ok(code: str) -> bool:
-    """EAN-8 / EAN-13 check-digit validation (§2.6). A 12-digit UPC-A is padded to 13."""
-    code = (code or "").strip().replace(" ", "").replace("-", "")
-    if not code.isdigit():
-        return False
-    if len(code) == 12:                       # UPC-A -> EAN-13 with a leading zero
-        code = "0" + code
-    if len(code) not in (8, 13):
+    """EAN-8 / EAN-13 check-digit validation (§2.6). An 11/12-digit UPC-A is padded to 13."""
+    code = canon_ean(code)
+    if not code.isdigit() or len(code) not in (8, 13):
         return False
     d = [int(c) for c in code]
     body, chk = d[:-1], d[-1]
@@ -121,7 +130,7 @@ def import_rows(conn, batch_id: int, rows: list[dict], *,
             result.products_touched.append(pid)
 
     for row in rows:
-        ean = (row.get("ean") or "").strip()
+        ean = canon_ean(row.get("ean"))       # 11/12-digit UPC-A -> canonical EAN-13 (one key)
 
         if not ean_check_ok(ean):
             review(ean or None, "EAN checksum failed")
