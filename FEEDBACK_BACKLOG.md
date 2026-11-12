@@ -24,7 +24,9 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
 - ✅ **No-brand import warning** (2026-11-12) — when Multi-brand is chosen but the file has no brand
   column, the wizard now warns that every new EAN will go to Unknown and nudges you to pick the one
   brand (the Ieva/Latina case). `confirmNoBrand()` in the import flow.
-- ☐ **Brand dropdown**: sort A–Z, with **new + multi-brand pinned on top**; **suppliers** the same.
+- ✅ **Brand + supplier dropdowns** (2026-11-12) — import wizard: brands and suppliers are alphabetical,
+  and the special options (🔀 Multi-brand, ➕ New brand, ➕ New supplier) are pinned at the **top** of each
+  dropdown instead of after the whole list. (brandList already sorted; suppliers now sorted too.)
 - ☐ **Best sellers**: group by brand like Offers, real columns, normal case (not CAPS), same text size.
 - ☐ **Column widths adjustable**, and **remember column order + widths** between sessions.
 - ✅ **Respect hidden rows** in the uploaded Excel file (2026-11-12) — rows hidden in the Excel file are

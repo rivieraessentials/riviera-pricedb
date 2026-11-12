@@ -963,16 +963,16 @@ function openImportWizard(name) {
   const wc = (() => { try { return inspectWorkbook(new Uint8Array(_pendingBytes || [])); } catch (e) { return { headers: [], brandLabel: null }; } })();
   _wizCols = wc;
   const brandColOpts = wc.headers.map(h => `<option value="${esc(h)}" ${wc.brandLabel && h.toLowerCase() === wc.brandLabel.toLowerCase() ? "selected" : ""}>${esc(h)}</option>`).join("");
-  const supOpts = store.suppliers.map(s => `<option>${esc(s.name)}</option>`).join("");
+  const supOpts = store.suppliers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(s => `<option>${esc(s.name)}</option>`).join("");
   const guess = (name.split(/[_\-. ]/)[0] || "").replace(/[^A-Za-z]/g, "");
   const brandMatch = store.brands.find(b => b.name.toLowerCase() === guess.toLowerCase());
   const brandOpts = brandList().map(b => `<option ${brandMatch && brandMatch.name === b.name ? "selected" : ""}>${esc(b.name)}</option>`).join("");
   openModal(`<div class="detail-header"><div><h2>Import offer</h2><div class="sub">${esc(name)}</div></div><div class="x" data-act="closemodal">×</div></div>
    <div class="detail-body"><div class="alert alert-blue"><b>Single-brand file:</b> pick its brand — it is applied to <b>every row</b>, so use it only when the whole file is one brand. <b>Multi-brand catalogue:</b> choose “🔀 Multi-brand” — if the file has a <b>brand column</b> it is used (new brand names ask for your OK first); otherwise each row’s brand is matched by <b>existing EAN</b>. Rows with no brand yet go to the <b>❓ Unknown brands</b> tab (and Review), resolved when a branded offer for that EAN arrives. Columns (EAN, description, price — lowest wins) are auto-mapped.</div>
      <div class="grid2">
-       <div><div class="fl">Supplier *</div><select id="iw-sup-sel" data-act="togglenew" data-k="sup"><option value="">— choose supplier —</option>${supOpts}<option value="__new__">➕ New supplier…</option></select>
+       <div><div class="fl">Supplier *</div><select id="iw-sup-sel" data-act="togglenew" data-k="sup"><option value="">— choose supplier —</option><option value="__new__">➕ New supplier…</option>${supOpts}</select>
          <input id="iw-sup-new" style="display:none;margin-top:6px" placeholder="new supplier name"/></div>
-       <div><div class="fl">Brand</div><select id="iw-brand-sel" data-act="togglenew" data-k="brand"><option value="">— pick a brand —</option>${brandOpts}<option value="__multi__">🔀 Multi-brand (match by EAN)</option><option value="__new__">➕ New brand…</option></select>
+       <div><div class="fl">Brand</div><select id="iw-brand-sel" data-act="togglenew" data-k="brand"><option value="">— pick a brand —</option><option value="__multi__">🔀 Multi-brand (match by EAN)</option><option value="__new__">➕ New brand…</option>${brandOpts}</select>
          <input id="iw-brand-new" style="display:none;margin-top:6px" placeholder="new brand name"/></div>
        <div><div class="fl">Offer type *</div><select id="iw-kind"><option value="price_list">Regular offer (longer validity)</option><option value="stock_offer">Stock offer (limited in time and/or quantity)</option></select></div>
        <div><div class="fl">Territory *</div><select id="iw-terr"><option value="T2">T2 · European</option><option value="T1">T1 · non-European</option></select></div>
