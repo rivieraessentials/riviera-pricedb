@@ -27,7 +27,9 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
 - ☐ **Brand dropdown**: sort A–Z, with **new + multi-brand pinned on top**; **suppliers** the same.
 - ☐ **Best sellers**: group by brand like Offers, real columns, normal case (not CAPS), same text size.
 - ☐ **Column widths adjustable**, and **remember column order + widths** between sessions.
-- ☐ **Respect hidden rows** in the uploaded Excel file (rows hidden in the file stay out).
+- ✅ **Respect hidden rows** in the uploaded Excel file (2026-11-12) — rows hidden in the Excel file are
+  now dropped on import. The parsers read with `cellStyles:true` (so SheetJS exposes `!rows[i].hidden`)
+  and filter them out (`sheetRows()` helper). Verified against a generated hidden-row file.
 
 ## ⚖️ Needs an owner decision (conflict with the append-only "a correction is a new offer, never an edit" rule)
 - ◐ **Edit a price manually in Offers** — true inline edit, or a "manual offer" that supersedes and keeps

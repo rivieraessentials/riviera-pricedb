@@ -176,17 +176,29 @@ function parseSheetRows(rows, brandOverride) {
   }
   return { rows: out, bad, ok: true };
 }
+// Read a sheet as rows, DROPPING rows hidden in the Excel file (owner rule: a row hidden in the
+// upload stays hidden — out of the import). Row-hidden lives in ws['!rows'] and is only populated
+// when the workbook is read with cellStyles:true, so every XLSX.read below passes it. '!rows' is
+// indexed by absolute sheet row, so offset by the used range's start row.
+function sheetRows(ws) {
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+  const meta = ws["!rows"];
+  if (!meta) return rows;
+  let start = 0;
+  try { start = XLSX.utils.decode_range(ws["!ref"]).s.r; } catch (e) {}
+  return rows.filter((_, i) => { const m = meta[start + i]; return !(m && m.hidden); });
+}
 function parseWorkbook(buf, brandOverride) {
-  const wb = XLSX.read(buf, { type: "array" }); let all = [], bad = 0, sheets = 0;
-  wb.SheetNames.forEach(n => { const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true }); const r = parseSheetRows(rows, brandOverride); if (r.ok) { all = all.concat(r.rows); bad += r.bad; sheets++; } });
+  const wb = XLSX.read(buf, { type: "array", cellStyles: true }); let all = [], bad = 0, sheets = 0;
+  wb.SheetNames.forEach(n => { const rows = sheetRows(wb.Sheets[n]); const r = parseSheetRows(rows, brandOverride); if (r.ok) { all = all.concat(r.rows); bad += r.bad; sheets++; } });
   return { rows: all, bad, sheets };
 }
 // Peek at a workbook's columns for the import wizard: the header labels of the first table-like sheet
 // and the auto-detected brand column — so the wizard can offer the "brand column" option and a picker.
 function inspectWorkbook(buf) {
-  let wb; try { wb = XLSX.read(buf, { type: "array" }); } catch (e) { return { headers: [], brandLabel: null }; }
+  let wb; try { wb = XLSX.read(buf, { type: "array", cellStyles: true }); } catch (e) { return { headers: [], brandLabel: null }; }
   for (const n of wb.SheetNames) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true });
+    const rows = sheetRows(wb.Sheets[n]);
     let hi = -1, best = -1, cols = null;
     for (let i = 0; i < Math.min(rows.length, 40); i++) {
       if ((rows[i] || []).some(looksEan)) continue;
@@ -204,10 +216,10 @@ function inspectWorkbook(buf) {
 // a detected price column (never stray numbers in a description), so an EAN+description file with
 // no price yields EAN-only lines (target = null).
 function parseRequestWorkbook(buf) {
-  const wb = XLSX.read(buf, { type: "array" });
+  const wb = XLSX.read(buf, { type: "array", cellStyles: true });
   const out = [];
   wb.SheetNames.forEach(n => {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true });
+    const rows = sheetRows(wb.Sheets[n]);
     if (!rows.length) return;
     let hi = 0, bestScore = -1, cols = null;
     // a row containing a real EAN is data, not a header (so a name with a keyword substring is safe)
