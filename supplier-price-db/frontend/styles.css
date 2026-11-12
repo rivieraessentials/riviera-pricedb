@@ -89,6 +89,9 @@ table.grid tbody tr:hover td{background:var(--blue-bg)!important}
 .c-ean{position:sticky;left:36px;z-index:2;background:var(--bg);font-variant-numeric:tabular-nums;color:var(--text2);width:var(--ean-w,136px);min-width:var(--ean-w,136px)}
 .c-prod{position:sticky;left:calc(36px + var(--ean-w,102px));z-index:2;background:var(--bg);min-width:var(--prod-w,170px);max-width:var(--prod-w,170px);overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .c-prod:hover{color:var(--blue)}
+/* drag handle on the right edge of the EAN / Product header cells to resize that column */
+.colgrip{position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;z-index:5}
+.colgrip:hover,.colgrip:active{background:var(--blue-bd)}
 thead .c-star,thead .c-ean,thead .c-prod{z-index:4;background:var(--bg3)}
 tr.best-row .c-star,tr.best-row .c-ean,tr.best-row .c-prod,tr.best-row td{background:var(--amber-bg)}
 tr.best-row:hover td{background:#fbeecb!important}

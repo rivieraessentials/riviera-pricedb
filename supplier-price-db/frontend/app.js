@@ -15,7 +15,7 @@
  * wiring is event delegation below. EVERY value that originates from a supplier file or the
  * user — descriptions, brand names, supplier names, notes — is written with esc()/textContent,
  * never as raw HTML, so a description like `<img src=x onerror=...>` renders as literal text.
- * localStorage is used ONLY for the grid zoom level (a per-viewer display preference).
+ * localStorage is used ONLY for per-viewer display preferences (grid zoom, column order + widths) — never data.
  */
 "use strict";
 
@@ -268,7 +268,14 @@ let reqDescriptions = {};   // EAN -> description from the last uploaded request
 let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
 let reqOpen = {};           // customer -> expanded? (request history accordion)
 let _lastReqCusts = [];     // customers in the last-rendered history (for expand/collapse all)
-const colOrder = {};   // in-memory per-brand column order (ephemeral; not persisted)
+// Per-brand column order (by batch_id) and the EAN/Product column widths are display PREFERENCES, so —
+// like the zoom level — they persist in localStorage (never any supplier/customer data). A saved order
+// whose batch_ids no longer exist after a re-import is ignored gracefully (those columns fall to the end).
+const colOrder = (() => { try { return JSON.parse(localStorage.getItem("pdbColOrder")) || {}; } catch (e) { return {}; } })();
+function saveColOrder() { try { localStorage.setItem("pdbColOrder", JSON.stringify(colOrder)); } catch (e) {} }
+const colW = (() => { try { return Object.assign({ ean: 102, prod: 170 }, JSON.parse(localStorage.getItem("pdbColW")) || {}); } catch (e) { return { ean: 102, prod: 170 }; } })();
+function saveColW() { try { localStorage.setItem("pdbColW", JSON.stringify(colW)); } catch (e) {} }
+let _gripDrag = false;   // true during a column-width drag, so the click that follows the drag is swallowed
 let _gridRows = {}, _curCols = [], _gridProds = [], _gridCols = [], _gridShowDiff = false;
 let unkSel = new Set();   // Unknown-brands tab: EANs ticked for bulk brand assignment
 let gridZoom = (() => { try { return parseFloat(localStorage.getItem("pdbZoom")) || 1; } catch (e) { return 1; } })();
@@ -276,7 +283,16 @@ const store = { brands: [], suppliers: [], fx: { rate_date: "", rates: {} }, cus
 let _pendingFile = null, _pendingBytes = null, _focusId = null, _confirmCb = null, _brandApproveResolve = null, _importGuardResolve = null, _wizCols = null;
 const _comboOptions = {};   // {inputId: [names]} for the searchable comboboxes
 
-function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (11 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (5 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(102 * gridZoom) + "px"); r.setProperty("--prod-w", Math.round(170 * gridZoom) + "px"); }
+function applyZoom() { const r = document.documentElement.style; r.setProperty("--gridfs", (11 * gridZoom).toFixed(1) + "px"); r.setProperty("--gridpad", (5 * gridZoom).toFixed(1) + "px"); r.setProperty("--ean-w", Math.round(colW.ean * gridZoom) + "px"); r.setProperty("--prod-w", Math.round(colW.prod * gridZoom) + "px"); }
+// Drag a column-header grip to resize the EAN / Product column; the new base width (zoom-independent) is
+// saved like the zoom level. Supplier price columns are sized by their short numbers, so they aren't resized.
+function startColResize(e, key) {
+  e.preventDefault(); e.stopPropagation(); _gripDrag = true;
+  const startX = e.clientX, startW = colW[key] || 120;
+  const move = ev => { const d = (ev.clientX - startX) / (gridZoom || 1); colW[key] = Math.max(60, Math.min(680, Math.round(startW + d))); applyZoom(); };
+  const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); document.body.style.cursor = ""; saveColW(); setTimeout(() => { _gripDrag = false; }, 0); };
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up); document.body.style.cursor = "col-resize";
+}
 function setZoom(d) { gridZoom = Math.min(1.5, Math.max(0.6, Math.round((gridZoom + d * 0.1) * 10) / 10)); try { localStorage.setItem("pdbZoom", gridZoom); } catch (e) {} applyZoom(); render(); }
 function brandList() { return store.brands.slice().sort((a, b) => a.name.localeCompare(b.name)); }
 function letterOf(n) { const ch = (n || "#").trim().charAt(0).toUpperCase(); return /[A-Z]/.test(ch) ? ch : "#"; }
@@ -388,8 +404,8 @@ VIEWS.rankings = async function (c, _retried) {
   }
   h += `<div class="muted" style="margin-bottom:8px">${prods.length} products · live offers only · ◀▶ move a column · ☆ compares · click a supplier header for its price list · click a product to edit.</div>`;
   h += '<div class="grid-wrap"><table class="grid"><thead><tr><th class="c-star"></th>' +
-    `<th class="c-ean lx" style="cursor:pointer" data-act="sort" data-col="ean">EAN${sortArrow("ean")}</th>` +
-    `<th class="c-prod lx" style="cursor:pointer" data-act="sort" data-col="prod">Product${sortArrow("prod")}</th>` +
+    `<th class="c-ean lx" style="cursor:pointer" data-act="sort" data-col="ean">EAN${sortArrow("ean")}<span class="colgrip" data-grip="ean" title="drag to resize this column"></span></th>` +
+    `<th class="c-prod lx" style="cursor:pointer" data-act="sort" data-col="prod">Product${sortArrow("prod")}<span class="colgrip" data-grip="prod" title="drag to resize this column"></span></th>` +
     (showDiff ? `<th class="diffcell" style="cursor:pointer" data-act="sort" data-col="diff" title="sort highest change first">Δ% (B vs A)${sortArrow("diff")}</th>` : "") +
     (showDiff ? "" : `<th style="cursor:pointer" data-act="sort" data-col="best">Best ${esc(display)}${sortArrow("best")}</th>`) +
     cols.map(b => {
@@ -1171,7 +1187,9 @@ document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", 
 document.getElementById("cur").addEventListener("change", e => { display = e.target.value; render(); });
 document.getElementById("modal").addEventListener("click", e => { if (e.target.id === "modal") { if (_brandApproveResolve) { const r = _brandApproveResolve; _brandApproveResolve = null; r(null); } if (_importGuardResolve) { const r = _importGuardResolve; _importGuardResolve = null; r(false); } closeModal(); } });
 
+document.addEventListener("mousedown", e => { const g = e.target.closest(".colgrip"); if (g) startColResize(e, g.dataset.grip); });
 document.addEventListener("click", e => {
+  if (_gripDrag) return;   // swallow the click that fires right after a column-resize drag (don't also sort)
   if (!e.target.closest(".combo")) closeCombos();   // click outside any combobox closes its menu
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, bid = el.dataset.bid, ean = el.dataset.ean, id = el.dataset.id;
@@ -1257,7 +1275,7 @@ function moveCol(bid, dir) {
   let ord = (colOrder[activeBrand] || _curCols).slice();
   const i = ord.indexOf(bid), j = i + dir;
   if (i < 0 || j < 0 || j >= ord.length) return;
-  [ord[i], ord[j]] = [ord[j], ord[i]]; colOrder[activeBrand] = ord; render();
+  [ord[i], ord[j]] = [ord[j], ord[i]]; colOrder[activeBrand] = ord; saveColOrder(); render();
 }
 
 // drag/drop import

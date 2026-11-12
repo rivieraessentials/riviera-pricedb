@@ -31,7 +31,12 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
   letter bar that expands into that letter's brands), and the table uses the clean Offers grid style
   (normal-case headers, consistent size, tabular prices with the cheapest in green) instead of the old
   small-caps `.tbl`. Previewed in the browser pane. (bsLetter state + bsletter handler.)
-- ☐ **Column widths adjustable**, and **remember column order + widths** between sessions.
+- ✅ **Column widths adjustable + remember column order/widths** (2026-11-12) — the per-brand column order
+  (the ◀▶ moves) now persists in localStorage, so the grid keeps the last order between sessions; and the
+  EAN/Product columns have a drag grip on their header's right edge to resize them, width saved too (both
+  display prefs, like the zoom level). Validated the drag in a browser-pane repro. Supplier price columns
+  are sized by their short numbers (not resized). *(A saved order resets gracefully after a re-import,
+  since columns are keyed by batch id.)*
 - ✅ **Respect hidden rows** in the uploaded Excel file (2026-11-12) — rows hidden in the Excel file are
   now dropped on import. The parsers read with `cellStyles:true` (so SheetJS exposes `!rows[i].hidden`)
   and filter them out (`sheetRows()` helper). Verified against a generated hidden-row file.
