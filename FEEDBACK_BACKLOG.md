@@ -14,6 +14,9 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
   merge and case-insensitive brand matching going forward.
 
 ## 🎨 UI improvements
+- ✅ **No-brand import warning** (2026-11-12) — when Multi-brand is chosen but the file has no brand
+  column, the wizard now warns that every new EAN will go to Unknown and nudges you to pick the one
+  brand (the Ieva/Latina case). `confirmNoBrand()` in the import flow.
 - ☐ **Brand dropdown**: sort A–Z, with **new + multi-brand pinned on top**; **suppliers** the same.
 - ☐ **Best sellers**: group by brand like Offers, real columns, normal case (not CAPS), same text size.
 - ☐ **Column widths adjustable**, and **remember column order + widths** between sessions.

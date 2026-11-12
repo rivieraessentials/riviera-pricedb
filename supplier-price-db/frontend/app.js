@@ -1024,6 +1024,13 @@ async function doImport() {
   // owner's OK (you chose "hold in Unknown until I confirm"). Unticked/declined -> Unknown tab.
   let allowed = null;   // lowercased brand names allowed to be assigned from the file
   const hasBrandCol = multibrand && parsed.rows.some(r => (r.brand || "").trim());
+  // Guard: multi-brand chosen but the file carries no brand (no brand column / all blank) -> any EAN
+  // not already in the database lands in Unknown. If the file is a single brand, the owner should pick
+  // it instead (the Ieva/Latina case). Proceed only after an explicit confirm.
+  if (multibrand && !hasBrandCol) {
+    const goOn = await confirmNoBrand(parsed.rows.length);
+    if (!goOn) return;   // user will cancel and pick a single brand
+  }
   if (hasBrandCol) {
     const knownLower = new Set(store.brands.map(b => b.name.toLowerCase()));
     allowed = new Set(knownLower);
@@ -1077,6 +1084,18 @@ function confirmSingleOnMulti(n, brandName) {
       <div class="detail-body"><div class="alert alert-amber">You picked a <b>single brand</b>${brandName ? ` (“${esc(brandName)}”)` : ""}, which files <b>every row</b> under it. This file lists <b>${n} brands</b> in a brand column — use <b>🔀 Multi-brand</b> instead to keep them separate (new names ask for your OK).</div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
           <button class="primary" data-act="guardcancel">Cancel — pick Multi-brand</button><button class="danger" data-act="guardsingle">Import all as one brand anyway</button></div></div>`);
+  });
+}
+
+// Guard dialog: multi-brand was picked but the file has no brand (no brand column / all blank),
+// so every EAN that isn't already known would go to Unknown. Nudge toward picking the one brand.
+function confirmNoBrand(n) {
+  return new Promise(resolve => {
+    _importGuardResolve = resolve;
+    openModal(`<div class="detail-header"><div><h2>No brand found in this file</h2><div class="sub">multi-brand selected, but the file has no brand column</div></div><div class="x" data-act="guardcancel">×</div></div>
+      <div class="detail-body"><div class="alert alert-amber">You chose <b>🔀 Multi-brand</b>, but this file has <b>no brand column</b>. Each row is branded only if its EAN is <b>already in the database</b> — every new EAN (of the <b>${n}</b> rows) lands in the <b>❓ Unknown references</b> tab. If this file is <b>one brand</b>, cancel and pick that brand so every row is filed correctly.</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <button class="primary" data-act="guardcancel">Cancel — pick a brand</button><button class="danger" data-act="guardsingle">Import anyway (match by EAN)</button></div></div>`);
   });
 }
 
