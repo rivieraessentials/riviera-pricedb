@@ -262,7 +262,7 @@ function parseRequestWorkbook(buf) {
 }
 
 // ---------- state + store ----------
-let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null;
+let display = "EUR", view = "rankings", activeBrand = null, bsBrand = null, bsLetter = null;
 let sortCol = null, sortDir = 1, searchQ = "", terrFilter = "all", curFilter = "all", cmpA = "", cmpB = "";
 let reqDescriptions = {};   // EAN -> description from the last uploaded request file (not persisted client-side)
 let reqBrand = "All", reqCust = "All", lastResult = null, brandLetter = null;
@@ -517,13 +517,21 @@ VIEWS.bestsellers = async function (c) {
   if (bsBrand === null) bsBrand = "All";
   const q = bsBrand !== "All" ? "?brand=" + encodeURIComponent(bsBrand) : "";
   const best = await apiGet("/bestsellers" + q);
+  const brands = brandList();
   let h = '<div class="alert alert-blue">Flag bestsellers with ★ in Offers. Pick a brand — the <b>3 cheapest live suppliers</b> for each, low→high.</div>';
+  // Brand navigation like the Offers page: "All brands" + an A–Z letter bar expanding into that letter's brands.
+  const letters = [...new Set(brands.map(b => letterOf(b.name)))].sort();
+  if (bsBrand !== "All" && bsLetter === null) bsLetter = letterOf(bsBrand);
+  if (bsLetter === null || !letters.includes(bsLetter)) bsLetter = letters[0] || null;
+  const letterBrands = brands.filter(b => letterOf(b.name) === bsLetter);
   h += '<div class="pills"><div class="pill ' + (bsBrand === "All" ? "active" : "") + '" data-act="bsbrand" data-brand="All">All brands</div>' +
-    brandList().map(b => `<div class="pill ${bsBrand === b.name ? "active" : ""}" data-act="bsbrand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") + "</div>";
-  h += '<div class="card"><table class="tbl"><thead><tr><th>★</th><th>Brand</th><th>EAN</th><th>Product</th><th>① Cheapest</th><th>② 2nd</th><th>③ 3rd</th></tr></thead><tbody>';
-  const cell = o => o ? `<b class="best-euro">${fmt(o.unit_price_eur)}</b> <span class="muted">${esc(o.supplier || "")}</span>` : '<span class="dlt">—</span>';
+    letters.map(L => `<div class="pill ${L === bsLetter ? "active" : ""}" data-act="bsletter" data-letter="${L}" style="min-width:32px;text-align:center;padding:6px 9px;font-weight:700">${L}</div>`).join("") + "</div>";
+  if (letterBrands.length) h += '<div class="pills">' + letterBrands.map(b => `<div class="pill ${bsBrand === b.name ? "active" : ""}" data-act="bsbrand" data-brand="${esc(b.name)}">${esc(b.name)}</div>`).join("") + "</div>";
+  // Clean grid table (same styling as Offers — normal-case headers, consistent sizing) instead of the old small-caps .tbl.
+  h += '<div class="grid-wrap"><table class="grid"><thead><tr><th style="width:34px;text-align:center">★</th><th class="lx">Brand</th><th class="lx">EAN</th><th class="lx">Product</th><th class="lx">① Cheapest</th><th class="lx">② 2nd</th><th class="lx">③ 3rd</th></tr></thead><tbody>';
+  const cell = (o, one) => o ? `${one ? '<b class="best-euro">' : '<b style="font-variant-numeric:tabular-nums">'}€${fmt(o.unit_price_eur)}</b> <span class="muted" style="font-size:10.5px">${esc(o.supplier || "")}</span>` : '<span class="dlt">—</span>';
   best.forEach(p => { const os = p.offers || [];
-    h += `<tr><td style="color:#e0a800">★</td><td><span class="badge badge-gray">${esc(p.brand || "")}</span></td><td class="muted">${esc(p.ean)}</td><td>${esc(p.description || "—")}</td><td>${cell(os[0])}</td><td>${cell(os[1])}</td><td>${cell(os[2])}</td></tr>`; });
+    h += `<tr><td style="color:#e0a800;text-align:center">★</td><td class="lx"><span class="badge badge-gray">${esc(p.brand || "")}</span></td><td class="lx" style="color:var(--text2);font-variant-numeric:tabular-nums">${esc(p.ean)}</td><td class="lx">${esc(p.description || "—")}</td><td class="lx">${cell(os[0], true)}</td><td class="lx">${cell(os[1])}</td><td class="lx">${cell(os[2])}</td></tr>`; });
   if (!best.length) h += `<tr><td colspan="7"><div class="empty">No bestsellers flagged${bsBrand !== "All" ? " in " + esc(bsBrand) : ""} — tick ★ in Offers.</div></td></tr>`;
   c.innerHTML = h + "</tbody></table></div>";
 };
@@ -1172,7 +1180,8 @@ document.addEventListener("click", e => {
     case "comboitem": { const inp = document.getElementById(el.dataset.target); if (inp) inp.value = el.dataset.val; const m = document.getElementById(el.dataset.target + "-menu"); if (m) m.style.display = "none"; break; }
     case "brand": activeBrand = el.dataset.brand; sortCol = null; cmpA = cmpB = ""; curFilter = "all"; if (activeBrand !== "__unknown__") brandLetter = letterOf(activeBrand); render(); break;
     case "brandletter": brandLetter = el.dataset.letter; render(); break;
-    case "bsbrand": bsBrand = el.dataset.brand; render(); break;
+    case "bsbrand": bsBrand = el.dataset.brand; if (bsBrand !== "All") bsLetter = letterOf(bsBrand); render(); break;
+    case "bsletter": bsLetter = el.dataset.letter; render(); break;
     case "terr": terrFilter = el.dataset.terr; curFilter = "all"; render(); break;
     case "curf": curFilter = el.dataset.cur; render(); break;
     case "zoom": setZoom(parseInt(el.dataset.dir, 10)); break;

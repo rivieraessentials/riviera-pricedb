@@ -27,7 +27,10 @@ Status: ☐ open · ◐ needs an owner decision · ✅ done.
 - ✅ **Brand + supplier dropdowns** (2026-11-12) — import wizard: brands and suppliers are alphabetical,
   and the special options (🔀 Multi-brand, ➕ New brand, ➕ New supplier) are pinned at the **top** of each
   dropdown instead of after the whole list. (brandList already sorted; suppliers now sorted too.)
-- ☐ **Best sellers**: group by brand like Offers, real columns, normal case (not CAPS), same text size.
+- ✅ **Best sellers restyle** (2026-11-12) — brand navigation now matches Offers (All brands + an A–Z
+  letter bar that expands into that letter's brands), and the table uses the clean Offers grid style
+  (normal-case headers, consistent size, tabular prices with the cheapest in green) instead of the old
+  small-caps `.tbl`. Previewed in the browser pane. (bsLetter state + bsletter handler.)
 - ☐ **Column widths adjustable**, and **remember column order + widths** between sessions.
 - ✅ **Respect hidden rows** in the uploaded Excel file (2026-11-12) — rows hidden in the Excel file are
   now dropped on import. The parsers read with `cellStyles:true` (so SheetJS exposes `!rows[i].hidden`)
